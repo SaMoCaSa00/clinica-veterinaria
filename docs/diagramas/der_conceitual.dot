@@ -1,0 +1,118 @@
+// Modelo conceitual — Diagrama Entidade-Relacionamento (notação de Chen)
+// Cardinalidade (mín,máx) escrita junto à entidade: quantas ocorrências DELA
+// se associam a UMA ocorrência da entidade do outro lado do relacionamento.
+// Gerar: dot -Tsvg der_conceitual.dot -o der_conceitual.svg
+graph DER {
+    graph [layout=dot, rankdir=TB, splines=true, nodesep=0.55, ranksep=0.75,
+           fontname="Inter", pad=0.3, bgcolor="white"];
+    node  [fontname="Inter", fontsize=11];
+    edge  [fontname="Inter", fontsize=10, color="#5b6472", penwidth=1.2,
+           labelfontname="Inter", labelfontsize=10, labelfontcolor="#1d3557"];
+
+    // ---------- entidades ----------
+    node [shape=plain];
+    Tutor [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>TUTOR</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_tutor</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome<BR/>cpf (único)<BR/>data_nascimento<BR/>email · telefone<BR/>endereço (logradouro, número,<BR/>bairro, cidade, UF, CEP)</TD></TR>
+      </TABLE>>];
+    Animal [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>ANIMAL</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_animal</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome · sexo<BR/>data_nascimento<BR/>pelagem · castrado<BR/>microchip (único)<BR/>data_obito</TD></TR>
+      </TABLE>>];
+    Especie [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>ESPÉCIE</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_especie</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome</TD></TR>
+      </TABLE>>];
+    Raca [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>RAÇA</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_raca</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome<BR/>porte</TD></TR>
+      </TABLE>>];
+    Veterinario [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>VETERINÁRIO</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_veterinario</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome · cpf<BR/>crmv + uf_crmv (único)<BR/>email · telefone<BR/>data_admissao · ativo</TD></TR>
+      </TABLE>>];
+    Especialidade [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>ESPECIALIDADE</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_especialidade</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome</TD></TR>
+      </TABLE>>];
+    Agendamento [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>AGENDAMENTO</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_agendamento</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">data_hora_inicio · data_hora_fim<BR/>tipo · motivo<BR/>status (agendado | realizado |<BR/>cancelado)<BR/>motivo_cancelamento</TD></TR>
+      </TABLE>>];
+    Atendimento [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>ATENDIMENTO</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_atendimento</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">data_hora_inicio · data_hora_fim<BR/>caráter · status (em aberto |<BR/>finalizado)<BR/>queixa · anamnese · exame físico<BR/>diagnóstico · peso · temperatura</TD></TR>
+      </TABLE>>];
+    Procedimento [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>PROCEDIMENTO</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_procedimento</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome (único) · categoria<BR/>descrição · preço_base<BR/>ativo</TD></TR>
+      </TABLE>>];
+    Medicamento [label=<
+      <TABLE BORDER="1.5" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1d3557">
+        <TR><TD BGCOLOR="#1d3557"><FONT COLOR="white"><B>MEDICAMENTO</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><U>id_medicamento</U></TD></TR><TR><TD ALIGN="LEFT" BALIGN="LEFT">nome_comercial<BR/>princípio_ativo · concentração<BR/>forma_farmacêutica<BR/>fabricante · controlado</TD></TR>
+      </TABLE>>];
+
+    // ---------- relacionamentos ----------
+    node [shape=diamond, style="filled", fillcolor="#fdf0d5", color="#c1121f",
+          penwidth=1.3, fontsize=10, margin="0.02,0.02", width=1.25, height=0.75];
+    r_possui      [label="possui"];
+    r_raca        [label="é da"];
+    r_especie     [label="pertence\na"];
+    r_atua        [label="atua\nem"];
+    r_agenda      [label="agenda"];
+    r_resp        [label="atende\nhorário"];
+    r_origina     [label="origina"];
+    r_recebe      [label="recebe"];
+    r_realiza     [label="realiza"];
+    r_inclui      [label="inclui"];
+    r_prescreve   [label="prescreve"];
+
+    // atributos de relacionamento (N:N)
+    node [shape=note, style="filled", fillcolor="#f1f3f5", color="#adb5bd",
+          fontsize=9, width=0, height=0, margin="0.08,0.04"];
+    a_inclui    [label="quantidade\nvalor_unitario\nobservação"];
+    a_prescreve [label="dose (qtd + unidade)\nvia · frequência (h)\nduração (dias)\ninstruções"];
+
+    // ---------- ligações (headlabel = cardinalidade junto à entidade) ----------
+    Tutor       -- r_possui    [taillabel="(1,1)", labeldistance=2.2];
+    r_possui    -- Animal      [headlabel="(0,N)", labeldistance=2.2];
+
+    Animal      -- r_raca      [taillabel="(0,N)", labeldistance=2.2];
+    r_raca      -- Raca        [headlabel="(1,1)", labeldistance=2.2];
+    Raca        -- r_especie   [taillabel="(1,N)", labeldistance=2.2];
+    r_especie   -- Especie     [headlabel="(1,1)", labeldistance=2.2];
+
+    Animal      -- r_agenda    [taillabel="(1,1)", labeldistance=2.2];
+    r_agenda    -- Agendamento [headlabel="(0,N)", labeldistance=2.2];
+    Veterinario -- r_resp      [taillabel="(1,1)", labeldistance=2.2];
+    r_resp      -- Agendamento [headlabel="(0,N)", labeldistance=2.2];
+
+    Agendamento -- r_origina   [taillabel="(0,1)", labeldistance=2.2];
+    r_origina   -- Atendimento [headlabel="(0,1)", labeldistance=2.2];
+
+    Animal      -- r_recebe    [taillabel="(1,1)", labeldistance=2.2];
+    r_recebe    -- Atendimento [headlabel="(0,N)", labeldistance=2.2];
+    Veterinario -- r_realiza   [taillabel="(1,1)", labeldistance=2.2];
+    r_realiza   -- Atendimento [headlabel="(0,N)", labeldistance=2.2];
+
+    Veterinario -- r_atua      [taillabel="(0,N)", labeldistance=2.2];
+    r_atua      -- Especialidade [headlabel="(1,N)", labeldistance=2.2];
+
+    Atendimento -- r_inclui    [taillabel="(0,N)", labeldistance=2.2];
+    r_inclui    -- Procedimento [headlabel="(0,N)", labeldistance=2.2];
+    Atendimento -- r_prescreve [taillabel="(0,N)", labeldistance=2.2];
+    r_prescreve -- Medicamento [headlabel="(0,N)", labeldistance=2.2];
+
+    r_inclui    -- a_inclui    [style=dashed, color="#adb5bd"];
+    r_prescreve -- a_prescreve [style=dashed, color="#adb5bd"];
+}

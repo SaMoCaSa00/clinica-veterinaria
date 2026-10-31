@@ -1,0 +1,123 @@
+/* Relatório — estilos de impressão (WeasyPrint) */
+:root {
+  --ink: #1b1f24;
+  --muted: #5b6472;
+  --navy: #1d3557;
+  --red: #c1121f;
+  --line: #d8dde3;
+  --soft: #f4f6f8;
+}
+
+@page {
+  size: A4;
+  margin: 22mm 19mm 20mm 19mm;
+  @top-left  { content: string(chapter); font: 500 7.5pt Inter; color: var(--muted); }
+  @top-right { content: "Sistema de Gestão de Clínica Veterinária"; font: 500 7.5pt Inter; color: var(--muted); }
+  @bottom-right { content: counter(page); font: 600 8pt Inter; color: var(--navy); }
+}
+@page :first { margin: 0; @top-left { content: none } @top-right { content: none } @bottom-right { content: none } }
+@page wide {
+  size: A4 landscape;
+  margin: 16mm 16mm 14mm 16mm;
+}
+
+html { font-family: "Bitstream Charter", "Caladea", serif; font-size: 10.2pt; color: var(--ink); line-height: 1.5; }
+body { counter-reset: h2; }
+p { margin: 0 0 7pt; text-align: justify; hyphens: auto; }
+b { font-weight: 700; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 0.82em; background: var(--soft); padding: 0 2pt; border-radius: 2pt; }
+sup { font-size: 0.65em; color: var(--red); font-family: Inter; font-weight: 600; }
+.nowrap { white-space: nowrap; }
+
+/* ---------- capa ---------- */
+.cover { height: 297mm; display: block; position: relative; background: var(--navy); color: white; page-break-after: always; }
+.cover-top { position: absolute; top: 26mm; left: 24mm; right: 24mm; }
+.cover-mid { position: absolute; top: 100mm; left: 24mm; right: 24mm; }
+.cover-bottom { position: absolute; bottom: 26mm; left: 24mm; right: 24mm; }
+.inst { font: 700 13pt Inter; margin: 0; letter-spacing: .2pt; }
+.inst-sub { font: 400 10pt Inter; margin: 2pt 0 0; opacity: .8; }
+.kicker { font: 600 9pt Inter; text-transform: uppercase; letter-spacing: 2pt; color: #f4a261; margin: 0 0 10pt; }
+.title { font: 700 32pt/1.12 "Inter Display", Inter; margin: 0 0 14pt; }
+.subtitle { font: 400 12.5pt/1.45 Inter; max-width: 140mm; opacity: .9; text-align: left; }
+.cover-meta { border-collapse: collapse; font: 9pt Inter; margin-bottom: 14pt; }
+.cover-meta td { padding: 3pt 12pt 3pt 0; vertical-align: top; border-top: 1px solid rgba(255,255,255,.2); }
+.cover-meta td:first-child { opacity: .65; width: 26mm; }
+.cover-meta code { background: rgba(255,255,255,.12); color: white; }
+.place { font: 500 9pt Inter; opacity: .75; margin: 0; }
+
+/* ---------- títulos ---------- */
+h2, h3 { font-family: Inter; color: var(--navy); hyphens: none; text-align: left; }
+h2 { font-size: 17pt; font-weight: 700; margin: 0 0 12pt; padding-bottom: 6pt; border-bottom: 2px solid var(--navy);
+     page-break-before: always; string-set: chapter content(); counter-increment: h2; counter-reset: h3; }
+h2:not(.no-num)::before { content: counter(h2) ". "; color: var(--red); }
+h3 { font-size: 11.5pt; font-weight: 650; margin: 16pt 0 6pt; counter-increment: h3; page-break-after: avoid; }
+h2:not(.no-num) ~ h3:not(.no-num):not(.q)::before { content: counter(h2) "." counter(h3) " "; color: var(--muted); font-weight: 500; }
+h3.q { font-size: 11.5pt; margin-top: 20pt; padding: 5pt 8pt; background: var(--soft); border-left: 3px solid var(--red); }
+h2 + h3.q { margin-top: 8pt; }
+
+/* ---------- sumário ---------- */
+.toc h2 { page-break-before: avoid; }
+.toc ol { list-style: none; padding: 0; margin: 10pt 0; counter-reset: toc; font-family: Inter; font-size: 10.5pt; }
+.toc li { counter-increment: toc; padding: 5pt 0; border-bottom: 1px dotted var(--line); }
+.toc li:not(.app)::before { content: counter(toc) "."; display: inline-block; width: 9mm; color: var(--red); font-weight: 600; }
+.toc li.app { padding-left: 9mm; }
+.toc a { color: var(--ink); text-decoration: none; }
+.toc a::after { content: leader(" ") target-counter(attr(href), page); color: var(--navy); font-weight: 600; }
+
+/* ---------- listas ---------- */
+ul, ol { margin: 0 0 8pt; padding-left: 15pt; }
+li { margin-bottom: 3pt; text-align: justify; }
+
+/* ---------- tabelas ---------- */
+table { border-collapse: collapse; width: 100%; margin: 4pt 0 12pt; }
+table.data, table.rules { font-family: Inter; font-size: 8.2pt; line-height: 1.35; }
+table.data th, table.rules th { background: var(--navy); color: white; font-weight: 600; text-align: left; padding: 4pt 6pt; }
+table.data td, table.rules td { padding: 4pt 6pt; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.data tr:nth-child(even) td, table.rules tr:nth-child(even) td { background: #fafbfc; }
+table.rules td:first-child { font-weight: 700; color: var(--red); white-space: nowrap; }
+table.data td:first-child { width: 24%; }
+table.data code { overflow-wrap: anywhere; }
+table.data.idx td:first-child { width: 30%; }
+table.data.idx td:nth-child(2) { width: 27%; }
+table.data code, table.rules code { font-size: 7.4pt; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+
+/* resultados de consulta */
+.result-box { margin: 6pt 0 4pt; }
+table.result { font-family: Inter; font-size: 7.2pt; line-height: 1.3; margin: 0; }
+table.result th { background: #e9edf2; color: var(--navy); font-weight: 650; text-align: left; padding: 3pt 4pt; border-bottom: 1.5px solid var(--navy); font-family: "DejaVu Sans Mono"; font-size: 6.6pt; }
+table.result td { padding: 2.5pt 4pt; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.result td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.result .null { color: #adb5bd; }
+table.result tr.total td { font-weight: 700; border-top: 1.5px solid var(--navy); }
+table.result.narrow { width: auto; min-width: 60mm; font-size: 8pt; }
+.rowcount { font: 7pt Inter; color: var(--muted); margin: 3pt 0 0; text-align: right; }
+
+/* ---------- código ---------- */
+pre.code { font-family: "DejaVu Sans Mono", monospace; font-size: 6.9pt; line-height: 1.38; background: #f7f8fa; border: 1px solid var(--line);
+           border-left: 3px solid var(--navy); padding: 7pt 9pt; margin: 6pt 0 10pt; white-space: pre-wrap; border-radius: 2pt; }
+pre.code.plain { font-size: 7.6pt; }
+.code .c1, .code .cm { font-style: normal; }
+
+/* ---------- figuras ---------- */
+figure { margin: 8pt 0 12pt; text-align: center; page-break-inside: avoid; }
+figure img { max-width: 100%; }
+figure.full img { width: 100%; }
+figure.der img { width: auto; max-width: 100%; max-height: 218mm; }
+figcaption { font: 7.8pt/1.4 Inter; color: var(--muted); margin-top: 6pt; text-align: left; }
+section.landscape { page: wide; page-break-before: always; page-break-after: always; }
+section.landscape figure { margin: 0; }
+section.landscape figure img { width: 100%; max-height: 165mm; object-fit: contain; }
+
+/* ---------- blocos ---------- */
+.schema { font-family: "DejaVu Sans Mono"; font-size: 7.4pt; line-height: 1.45; background: var(--soft); padding: 8pt 10pt; border-radius: 2pt; margin: 6pt 0 10pt; }
+.schema p { margin: 0 0 4pt; text-align: left; padding-left: 12pt; text-indent: -12pt; }
+.schema u { text-decoration-thickness: 1px; }
+.callout { background: #fdf0d5; border-left: 3px solid #f4a261; padding: 7pt 10pt; font-size: 9.6pt; }
+.note { font-size: 8.8pt; color: var(--muted); font-style: italic; }
+.goal { font-size: 9.8pt; }
+.two-col { display: flex; gap: 12pt; align-items: flex-start; }
+.two-col > div:first-child { flex: 1; }
+.two-col > div:last-child { flex: 0 0 64mm; }
+.app-title::before { content: none; }
