@@ -98,6 +98,25 @@ INSERT INTO medicamento (id_medicamento, nome_comercial, principio_ativo, concen
     (16, 'Gabapentina',  'gabapentina',                                   '100 mg',     'CAPSULA',      'Farmácia de manipulação', TRUE),
     (17, 'Vitamina C',   'ácido ascórbico',                               '200 mg/mL',  'SOLUCAO_ORAL', 'Farmácia de manipulação', FALSE);
 
+-- Espécies indicadas. Itens que não aparecem aqui (consultas, exames,
+-- fluidoterapia, meloxicam, tramadol...) valem para qualquer espécie.
+-- Espécies: 1 Cão, 2 Gato, 3 Ave, 4 Roedor, 5 Coelho
+INSERT INTO procedimento_especie (id_procedimento, id_especie) VALUES
+    (11, 1),                 -- V10: só cão
+    (12, 1), (12, 2),        -- antirrábica: cão e gato
+    (13, 2),                 -- V4 felina: só gato
+    (14, 1), (14, 2), (14, 5),  -- castração: cão, gato e coelho
+    (15, 1), (15, 2),        -- profilaxia dentária: cão e gato
+    (16, 1);                 -- gastropexia (torção gástrica): só cão
+
+INSERT INTO medicamento_especie (id_medicamento, id_especie) VALUES
+    ( 1, 1),                 -- Apoquel (oclacitinib): só cão
+    ( 4, 1),                 -- Simparic (sarolaner): só cão
+    ( 5, 1),                 -- Drontal Plus: formulação canina
+    (14, 1),                 -- Vetmedin (pimobendan): cão
+    (15, 1), (15, 2),        -- Revolution (selamectina): cão e gato
+    (17, 4), (17, 5);        -- Vitamina C oral: roedores e coelhos
+
 
 -- =============================================================================
 -- 2. PESSOAS E ANIMAIS
@@ -477,5 +496,19 @@ DELETE FROM tutor t
 -- Cancelar um agendamento que já virou atendimento (agendamento 2).
 -- UPDATE agendamento SET status = 'CANCELADO', motivo_cancelamento = 'Teste' WHERE id_agendamento = 2;
 --   -> ERROR: Agendamento 2 já possui atendimento e deve permanecer REALIZADO.
+
+-- Cadastrar tutor com CPF inválido (dígito verificador errado).
+-- INSERT INTO tutor (nome, cpf, telefone, cidade, uf)
+-- VALUES ('Teste', '12345678900', '34999999999', 'Uberlândia', 'MG');
+--   -> ERROR: new row for relation "tutor" violates check constraint "ck_tutor_cpf"
+
+-- Prescrever Simparic (só para cão) no atendimento de um gato (atendimento 7, Luna).
+-- INSERT INTO prescricao (id_atendimento, id_medicamento, dose_quantidade, dose_unidade, via_administracao, frequencia_horas)
+-- VALUES (7, 4, 1, 'comprimido', 'ORAL', 720);
+--   -> ERROR: O medicamento "Simparic" não é indicado para a espécie Gato (animal: Luna).
+
+-- Aplicar vacina V10 (só cão) em um gato (atendimento 16, Mingau).
+-- INSERT INTO atendimento_procedimento (id_atendimento, id_procedimento) VALUES (16, 11);
+--   -> ERROR: O procedimento "Vacina polivalente canina (V10)" não é indicado para a espécie Gato (animal: Mingau).
 
 COMMIT;

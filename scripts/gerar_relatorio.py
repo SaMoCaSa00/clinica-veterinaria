@@ -132,13 +132,14 @@ def main():
             "RES": lambda k: result_table(cur, queries[k]),
             "DDL": lambda k: ddl_table(ddl, k),
             "FUNC": lambda k: ddl_function(ddl, k),
+            "FUNC2": lambda k: code(re.search(rf"^CREATE OR REPLACE FUNCTION {k}\(.*?^\$\$;", ddl, re.M | re.S).group(0)),
         }
 
         def sub(m):
             kind, _, arg = m.group(1).partition(":")
             return repl[kind](arg)
 
-        out = re.sub(r"\{\{([A-Z]+(?::[\w]+)?)\}\}", sub, tpl)
+        out = re.sub(r"\{\{([A-Z0-9]+(?::[\w]+)?)\}\}", sub, tpl)
         conn.rollback()
 
     css = HtmlFormatter(style="friendly").get_style_defs(".code")

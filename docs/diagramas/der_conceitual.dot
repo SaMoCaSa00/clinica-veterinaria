@@ -76,6 +76,8 @@ graph DER {
     r_realiza     [label="realiza"];
     r_inclui      [label="inclui"];
     r_prescreve   [label="prescreve"];
+    r_ind_proc    [label="indicado\npara"];
+    r_ind_med     [label="indicado\npara"];
 
     // atributos de relacionamento (N:N)
     node [shape=note, style="filled", fillcolor="#f1f3f5", color="#adb5bd",
@@ -112,6 +114,11 @@ graph DER {
     r_inclui    -- Procedimento [headlabel="(0,N)", labeldistance=2.2];
     Atendimento -- r_prescreve [taillabel="(0,N)", labeldistance=2.2];
     r_prescreve -- Medicamento [headlabel="(0,N)", labeldistance=2.2];
+
+    Procedimento -- r_ind_proc [taillabel="(0,N)", labeldistance=2.2];
+    r_ind_proc  -- Especie     [headlabel="(0,N)", labeldistance=2.2];
+    Medicamento -- r_ind_med   [taillabel="(0,N)", labeldistance=2.2];
+    r_ind_med   -- Especie     [headlabel="(0,N)", labeldistance=2.2];
 
     r_inclui    -- a_inclui    [style=dashed, color="#adb5bd"];
     r_prescreve -- a_prescreve [style=dashed, color="#adb5bd"];

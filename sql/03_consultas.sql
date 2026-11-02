@@ -309,3 +309,19 @@ SELECT v.nome                                                  AS veterinario,
   JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
  GROUP BY v.id_veterinario, v.nome
  ORDER BY taxa_cancelamento_pct DESC, agendamentos DESC;
+
+-- -----------------------------------------------------------------------------
+-- C5. Itens restritos por espécie (o que cada espécie pode receber)
+--     Lista procedimentos e medicamentos com restrição, agrupados por espécie.
+--     Itens sem restrição valem para todas e não aparecem aqui.
+-- -----------------------------------------------------------------------------
+SELECT e.nome                                                          AS especie,
+       string_agg(DISTINCT p.nome, '; ')                               AS procedimentos_restritos,
+       string_agg(DISTINCT m.nome_comercial || ' ' || m.concentracao, '; ') AS medicamentos_restritos
+  FROM especie e
+  LEFT JOIN procedimento_especie pe ON pe.id_especie      = e.id_especie
+  LEFT JOIN procedimento         p  ON p.id_procedimento  = pe.id_procedimento
+  LEFT JOIN medicamento_especie  me ON me.id_especie      = e.id_especie
+  LEFT JOIN medicamento          m  ON m.id_medicamento   = me.id_medicamento
+ GROUP BY e.id_especie, e.nome
+ ORDER BY e.id_especie;

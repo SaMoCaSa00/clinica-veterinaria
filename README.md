@@ -10,7 +10,10 @@ Trabalho prático da disciplina de Banco de Dados — Engenharia de Computação
 
 ## Destaques
 
-- **13 tabelas em 3FN/FNBC** com PKs, FKs, `UNIQUE`, `NOT NULL` e `CHECK` de domínio, formato e semântica.
+- **15 tabelas em 3FN/FNBC** com PKs, FKs, `UNIQUE`, `NOT NULL` e `CHECK` de domínio, formato e semântica.
+- **CPF validado de verdade** pela função `cpf_valido()` (dígitos verificadores, módulo 11), usada no `CHECK`.
+- **Regras por espécie**: vacinas, cirurgias e medicamentos restritos às espécies indicadas, garantido por gatilho.
+- **Interface web** em Node.js ([`app/`](app/)) com painel, agenda, prontuário, cadastros e relatórios.
 - **Regras de negócio no próprio banco**, não só na aplicação:
   - agenda sem conflito por veterinário, via restrição de exclusão GiST (`tstzrange` + `btree_gist`);
   - FK composta que garante que o atendimento vinculado a um agendamento seja do mesmo animal;
@@ -34,7 +37,8 @@ Trabalho prático da disciplina de Banco de Dados — Engenharia de Computação
 │   ├── 00_criar_banco.sql      # CREATE DATABASE (rodar conectado ao banco "postgres")
 │   ├── 01_ddl.sql              # esquema, tabelas, restrições, índices, gatilhos, visões
 │   ├── 02_dml.sql              # carga de dados + exemplos de UPDATE/DELETE + testes de integridade
-│   └── 03_consultas.sql        # 5 consultas obrigatórias + 4 complementares
+│   └── 03_consultas.sql        # 5 consultas obrigatórias + 5 complementares
+├── app/                        # interface web (Node.js + Express)
 ├── docs/
 │   ├── relatorio.pdf           # entregável
 │   ├── relatorio/              # fonte do relatório (HTML + CSS)
@@ -74,6 +78,20 @@ docker compose up -d
 
 Sobe o PostgreSQL 16 em `localhost:5432` (usuário e senha `postgres`) já com esquema e dados, e o pgAdmin em <http://localhost:5050> (`admin@clinica.local` / `admin`). Para recomeçar do zero: `docker compose down -v`.
 
+## Interface web
+
+![Painel](docs/screenshots/painel.png)
+
+```bash
+cd app
+npm install
+copy .env.example .env   # Linux/Mac: cp .env.example .env
+# coloque a senha do PostgreSQL no .env
+npm start                # http://localhost:3000
+```
+
+Detalhes em [`app/README.md`](app/README.md).
+
 ## Consultas
 
 | # | Pergunta de negócio | Técnicas |
@@ -87,6 +105,7 @@ Sobe o PostgreSQL 16 em `localhost:5432` (usuário e senha `postgres`) já com e
 | C2 | Faturamento mensal por categoria | pivot com `SUM(...) FILTER` |
 | C3 | Cães e gatos sem vacina há 12 meses | anti-join `NOT EXISTS`, subconsulta correlacionada |
 | C4 | Taxa de cancelamento por veterinário | agregação condicional |
+| C5 | Itens restritos por espécie | `LEFT JOIN` múltiplos, `string_agg(DISTINCT ...)` |
 
 > Os dados vão de jan/2026 a jan/2027, com 27/10/2026 como "hoje". Q1 e C3 usam `now()`; se rodar bem depois dessa data, troque `now()` por uma data fixa na CTE `params`.
 

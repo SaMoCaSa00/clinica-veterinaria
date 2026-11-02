@@ -42,6 +42,7 @@
     <li><a href="#s5">Scripts DDL e DML</a></li>
     <li><a href="#s6">Consultas obrigatórias</a></li>
     <li><a href="#s7">Consultas complementares</a></li>
+    <li><a href="#s7b">Interface web</a></li>
     <li><a href="#s8">Considerações finais</a></li>
     <li class="app"><a href="#apA">Apêndice A — Como executar</a></li>
   </ol>
@@ -68,6 +69,8 @@
     <tr><td>RN08</td><td>O valor cobrado de um procedimento é o da data do atendimento; reajustes de tabela não alteram o histórico.</td><td>Coluna <code>valor_unitario</code> + gatilho de preço padrão</td></tr>
     <tr><td>RN09</td><td>Animais com óbito registrado não recebem novos atendimentos; o histórico é preservado.</td><td>Gatilho + <code>ON DELETE RESTRICT</code></td></tr>
     <tr><td>RN10</td><td>Profissionais desligados e procedimentos descontinuados são inativados, nunca apagados.</td><td>Coluna <code>ativo</code>; FKs <code>RESTRICT</code></td></tr>
+    <tr><td>RN11</td><td>O CPF de tutores e veterinários precisa ser válido: dígitos verificadores corretos e não pode ser uma sequência repetida.</td><td>Função <code>cpf_valido()</code> no <code>CHECK</code></td></tr>
+    <tr><td>RN12</td><td>Procedimentos e medicamentos podem ser restritos a certas espécies (V10 só em cão, Simparic não vai para gato). Itens sem restrição valem para todas.</td><td>Tabelas <code>procedimento_especie</code> e <code>medicamento_especie</code> + gatilho</td></tr>
   </tbody>
 </table>
 
@@ -96,6 +99,8 @@
     <tr><td>realiza</td><td>Veterinário — Atendimento</td><td>1:N</td><td>Atendimento total</td><td>Cada atendimento é responsabilidade de um veterinário (RN03).</td></tr>
     <tr><td>inclui</td><td>Atendimento — Procedimento</td><td>N:N</td><td>Ambas parciais</td><td>Atributos: quantidade, valor unitário, observação.</td></tr>
     <tr><td>prescreve</td><td>Atendimento — Medicamento</td><td>N:N</td><td>Ambas parciais</td><td>Atributos: dose, via, frequência, duração, instruções.</td></tr>
+    <tr><td>indicado para</td><td>Procedimento — Espécie</td><td>N:N</td><td>Ambas parciais</td><td>Procedimento sem espécies associadas vale para todas (RN12).</td></tr>
+    <tr><td>indicado para</td><td>Medicamento — Espécie</td><td>N:N</td><td>Ambas parciais</td><td>Mesma regra para medicamentos (RN12).</td></tr>
   </tbody>
 </table>
 
@@ -105,6 +110,7 @@
   <li><b>Procedimento e Medicamento são catálogos</b>. O que acontece em cada atendimento é registrado nos relacionamentos <i>inclui</i> e <i>prescreve</i>, que carregam os atributos do evento (quanto foi cobrado, qual dose foi receitada).</li>
   <li><b>Agendamento e Atendimento são entidades distintas</b>. A agenda é uma intenção (pode ser cancelada ou não ter comparecimento); o atendimento é o fato clínico. Separá-los permite atendimentos sem horário (urgências) e cancelamentos sem apagar dados.</li>
   <li><b>Histórico clínico não é uma entidade</b>: ele é derivado dos atendimentos do animal, com seus procedimentos e prescrições. No banco, isso vira a visão <code>vw_historico_clinico</code>.</li>
+  <li><b>Restrição por espécie como relacionamento</b>, e não como coluna. Um procedimento pode servir a várias espécies (castração: cão, gato e coelho), então a relação é N:N. A ausência de linhas significa “sem restrição”, o que evita cadastrar consulta e hemograma para todas as espécies.</li>
   <li><b>Peso e temperatura ficam no atendimento</b>, não no animal, porque mudam ao longo do tempo e o histórico deles tem valor clínico.</li>
 </ul>
 
@@ -125,6 +131,8 @@
 <p>ATENDIMENTO (<u>id_atendimento</u>, <i>id_animal</i> → ANIMAL, <i>id_veterinario</i> → VETERINARIO, <i>id_agendamento</i><sup>U</sup>, data_hora_inicio, data_hora_fim, carater, status, queixa_principal, anamnese, exame_fisico, diagnostico, peso_kg, temperatura_c, observacoes) — (<i>id_agendamento, id_animal</i>) → AGENDAMENTO(id_agendamento, id_animal)</p>
 <p>PROCEDIMENTO (<u>id_procedimento</u>, nome<sup>U</sup>, categoria, descricao, preco_base, ativo)</p>
 <p>ATENDIMENTO_PROCEDIMENTO (<u><i>id_atendimento</i></u> → ATENDIMENTO, <u><i>id_procedimento</i></u> → PROCEDIMENTO, quantidade, valor_unitario, observacao)</p>
+<p>PROCEDIMENTO_ESPECIE (<u><i>id_procedimento</i></u> → PROCEDIMENTO, <u><i>id_especie</i></u> → ESPECIE)</p>
+<p>MEDICAMENTO_ESPECIE (<u><i>id_medicamento</i></u> → MEDICAMENTO, <u><i>id_especie</i></u> → ESPECIE)</p>
 <p>MEDICAMENTO (<u>id_medicamento</u>, nome_comercial, principio_ativo, concentracao, forma_farmaceutica, fabricante, controlado) — (nome_comercial, concentracao, forma_farmaceutica)<sup>U</sup></p>
 <p>PRESCRICAO (<u>id_prescricao</u>, <i>id_atendimento</i> → ATENDIMENTO, <i>id_medicamento</i> → MEDICAMENTO, dose_quantidade, dose_unidade, via_administracao, frequencia_horas, duracao_dias, instrucoes) — (id_atendimento, id_medicamento)<sup>U</sup></p>
 </div>
@@ -142,10 +150,10 @@
   <tbody>
     <tr><td>Entidade (PK)</td><td>Todas as tabelas</td><td>Chave substituta <code>IDENTITY</code>; PK composta nas associativas puras (<code>veterinario_especialidade</code>, <code>atendimento_procedimento</code>).</td></tr>
     <tr><td>Chaves candidatas</td><td>cpf, email, crmv+UF, microchip, nomes de catálogo</td><td>Impedem cadastros duplicados no mundo real mesmo com PK artificial.</td></tr>
-    <tr><td>Referencial (FK)</td><td>14 chaves estrangeiras</td><td><code>RESTRICT</code> onde há histórico a preservar; <code>CASCADE</code> só em itens que não existem sem o pai (procedimentos e prescrições do atendimento, especialidades do veterinário, agenda do animal).</td></tr>
+    <tr><td>Referencial (FK)</td><td>18 chaves estrangeiras</td><td><code>RESTRICT</code> onde há histórico a preservar; <code>CASCADE</code> só em itens que não existem sem o pai (procedimentos e prescrições do atendimento, especialidades do veterinário, agenda do animal).</td></tr>
     <tr><td>FK composta</td><td><code>atendimento (id_agendamento, id_animal)</code></td><td>Garante que o atendimento vinculado a um horário seja do mesmo animal do horário (RN06).</td></tr>
     <tr><td>Domínio (CHECK)</td><td>status, tipo, caráter, categoria, sexo, porte, via, unidade, UF</td><td>Restringe colunas a valores válidos.</td></tr>
-    <tr><td>Formato (CHECK)</td><td>CPF, telefone, CEP, e-mail, microchip, CRMV</td><td>Expressões regulares: só dígitos e no tamanho certo.</td></tr>
+    <tr><td>Formato (CHECK)</td><td>CPF, telefone, CEP, e-mail, microchip, CRMV</td><td>Expressões regulares: só dígitos e no tamanho certo. O CPF vai além do formato: a função <code>cpf_valido()</code> confere os dois dígitos verificadores (módulo 11).</td></tr>
     <tr><td>Semântica (CHECK)</td><td>agendamento, atendimento, animal, prescrição</td><td>Fim depois do início; cancelado ⇔ tem motivo; finalizado ⇔ tem fim; peso &gt; 0; temperatura entre 30 e 45 °C; óbito ≥ nascimento; duração do horário ≤ 8 h.</td></tr>
     <tr><td>Exclusão (GiST)</td><td><code>agendamento</code></td><td>Mesmo veterinário + intervalos sobrepostos é proibido, ignorando cancelados (RN05).</td></tr>
     <tr><td>Gatilhos</td><td>atendimento, agendamento, atendimento_procedimento</td><td>Regras que envolvem mais de uma tabela (RN06, RN08, RN09).</td></tr>
@@ -161,7 +169,7 @@
   <li>atributos multivalorados (as especialidades de um veterinário, os procedimentos e as prescrições de um atendimento) viraram tabelas próprias em vez de listas numa coluna.</li>
 </ul>
 
-<p><b>2ª Forma Normal.</b> Só duas tabelas têm chave primária composta. Em <code>veterinario_especialidade</code> não há atributos não-chave. Em <code>atendimento_procedimento</code> (PK = id_atendimento + id_procedimento), <code>quantidade</code>, <code>valor_unitario</code> e <code>observacao</code> dependem da chave inteira. Em especial, <code>valor_unitario</code> <b>não</b> depende só do procedimento: é o preço praticado <i>naquele</i> atendimento (pode ter desconto ou retorno gratuito). O preço de tabela, que depende só do procedimento, está em <code>procedimento.preco_base</code>. As demais tabelas têm PK simples, logo estão trivialmente em 2FN.</p>
+<p><b>2ª Forma Normal.</b> Quatro tabelas têm chave primária composta. Em <code>veterinario_especialidade</code>, <code>procedimento_especie</code> e <code>medicamento_especie</code> não há atributos não-chave. Em <code>atendimento_procedimento</code> (PK = id_atendimento + id_procedimento), <code>quantidade</code>, <code>valor_unitario</code> e <code>observacao</code> dependem da chave inteira. Em especial, <code>valor_unitario</code> <b>não</b> depende só do procedimento: é o preço praticado <i>naquele</i> atendimento (pode ter desconto ou retorno gratuito). O preço de tabela, que depende só do procedimento, está em <code>procedimento.preco_base</code>. As demais tabelas têm PK simples, logo estão trivialmente em 2FN.</p>
 
 <p><b>3ª Forma Normal.</b> Nenhum atributo não-chave depende de outro atributo não-chave:</p>
 <ul>
@@ -202,7 +210,7 @@
 
 <h3>Índices</h3>
 
-<p>O PostgreSQL cria índices B-tree automaticamente para PKs e <code>UNIQUE</code>, mas <b>não</b> para chaves estrangeiras. Os índices abaixo foram criados para cobrir FKs usadas em junções e os filtros das consultas da seção 6. No total, o esquema tem 39 índices, contando os automáticos.</p>
+<p>O PostgreSQL cria índices B-tree automaticamente para PKs e <code>UNIQUE</code>, mas <b>não</b> para chaves estrangeiras. Os índices abaixo foram criados para cobrir FKs usadas em junções e os filtros das consultas da seção 6. No total, o esquema tem 43 índices, contando os automáticos.</p>
 
 <table class="data idx">
   <thead><tr><th>Índice</th><th>Colunas / tipo</th><th>Justificativa</th></tr></thead>
@@ -215,7 +223,7 @@
     <tr><td><code>ix_agendamento_futuro</code></td><td>agendamento (data_hora_inicio) WHERE status = 'AGENDADO'</td><td><b>Parcial</b>: só indexa horários pendentes, que são poucos perto do histórico de realizados e cancelados. Atende Q1 e a tela de agenda.</td></tr>
     <tr><td><code>ix_atendimento_em_aberto</code></td><td>atendimento (id_animal) WHERE status = 'EM_ABERTO'</td><td><b>Parcial</b>: atendimentos em aberto são uma fração mínima da tabela (Q1, painel de internados).</td></tr>
     <tr><td><code>ix_tutor_nome_lower</code></td><td>tutor (lower(nome) text_pattern_ops)</td><td><b>De expressão</b>: busca no balcão por <code>lower(nome) LIKE 'mar%'</code>, sem diferenciar maiúsculas.</td></tr>
-    <tr><td><code>ix_atproc_procedimento</code><br><code>ix_prescricao_medicamento</code><br><code>ix_vetesp_especialidade</code></td><td>2ª coluna das associativas</td><td>A PK composta só serve buscas pela 1ª coluna. Esses índices cobrem o caminho inverso, como “onde este medicamento foi prescrito” (Q4), além de verificações de FK.</td></tr>
+    <tr><td><code>ix_atproc_procedimento</code><br><code>ix_prescricao_medicamento</code><br><code>ix_vetesp_especialidade</code><br><code>ix_procesp_especie</code><br><code>ix_medesp_especie</code></td><td>2ª coluna das associativas</td><td>A PK composta só serve buscas pela 1ª coluna. Esses índices cobrem o caminho inverso, como “onde este medicamento foi prescrito” (Q4), além de verificações de FK.</td></tr>
     <tr><td><code>ex_agendamento_conflito_vet</code></td><td>GiST (id_veterinario, tstzrange(início, fim))</td><td>Criado pela restrição de exclusão. Além de impedir conflitos, acelera “horários do veterinário que se sobrepõem a X”.</td></tr>
   </tbody>
 </table>
@@ -243,10 +251,15 @@
     <tr><td><code>trg_atendimento_vincula_agendamento</code></td><td>AFTER INSERT/UPDATE em atendimento</td><td>Barra atendimento de agendamento cancelado e marca o agendamento como REALIZADO (RN06).</td></tr>
     <tr><td><code>trg_agendamento_valida_status</code></td><td>BEFORE UPDATE em agendamento</td><td>Agendamento que já gerou atendimento não pode ser cancelado nem reaberto (RN06).</td></tr>
     <tr><td><code>trg_atendimento_valida_animal</code></td><td>BEFORE INSERT/UPDATE em atendimento</td><td>Barra atendimento com data posterior ao óbito (RN09).</td></tr>
+    <tr><td><code>trg_atproc_valida_especie</code><br><code>trg_prescricao_valida_especie</code></td><td>BEFORE INSERT/UPDATE em atendimento_procedimento e prescricao</td><td>Barra procedimento ou medicamento não indicado para a espécie do animal (RN12). Uma só função atende às duas tabelas, usando <code>TG_TABLE_NAME</code>.</td></tr>
     <tr><td><code>trg_atproc_preco_padrao</code></td><td>BEFORE INSERT em atendimento_procedimento</td><td>Se o valor não for informado, usa o preço de tabela vigente (RN08).</td></tr>
   </tbody>
 </table>
 {{FUNC:fn_atendimento_vincula_agendamento}}
+
+<h3>Validação de CPF</h3>
+<p>A função <code>cpf_valido()</code> é <code>IMMUTABLE</code> (o resultado depende só da entrada), requisito para ser usada em <code>CHECK</code>. Ela rejeita sequências repetidas, que passariam na conta, e calcula os dois dígitos verificadores com pesos decrescentes e módulo 11:</p>
+{{FUNC2:cpf_valido}}
 
 <!-- ============================== 5 ============================== -->
 <h2 id="s5">Scripts DDL e DML</h2>
@@ -255,9 +268,9 @@
   <thead><tr><th>Arquivo</th><th>Conteúdo</th></tr></thead>
   <tbody>
     <tr><td><code>sql/00_criar_banco.sql</code></td><td>Cria o banco <code>clinica_vet</code> (UTF-8) e define o fuso. Roda conectado ao banco <code>postgres</code>, pois <code>CREATE DATABASE</code> não pode estar dentro de uma transação.</td></tr>
-    <tr><td><code>sql/01_ddl.sql</code></td><td>Esquema, extensão, 13 tabelas com todas as restrições, índices, 4 funções e gatilhos, 2 visões e comentários.</td></tr>
-    <tr><td><code>sql/02_dml.sql</code></td><td>Carga de dados, ajuste das sequências, 7 exemplos de UPDATE, 3 de DELETE e 7 testes de integridade comentados.</td></tr>
-    <tr><td><code>sql/03_consultas.sql</code></td><td>As 5 consultas obrigatórias e 4 complementares.</td></tr>
+    <tr><td><code>sql/01_ddl.sql</code></td><td>Esquema, extensão, função de validação de CPF, 15 tabelas com todas as restrições, índices, 5 funções de gatilho, 2 visões e comentários.</td></tr>
+    <tr><td><code>sql/02_dml.sql</code></td><td>Carga de dados, ajuste das sequências, 7 exemplos de UPDATE, 3 de DELETE e 10 testes de integridade comentados.</td></tr>
+    <tr><td><code>sql/03_consultas.sql</code></td><td>As 5 consultas obrigatórias e 5 complementares.</td></tr>
   </tbody>
 </table>
 
@@ -306,6 +319,9 @@
     <tr><td>Apagar tutor que tem animais</td><td>FK <code>fk_animal_tutor</code> (RESTRICT)</td></tr>
     <tr><td>Cancelar agendamento sem motivo</td><td><code>ck_agendamento_cancel</code></td></tr>
     <tr><td>Cancelar agendamento que já virou atendimento</td><td>gatilho <code>fn_agendamento_valida_status</code></td></tr>
+    <tr><td>Cadastrar tutor com CPF de dígito verificador errado</td><td><code>ck_tutor_cpf</code> (função <code>cpf_valido</code>)</td></tr>
+    <tr><td>Prescrever Simparic (só cão) para uma gata</td><td>gatilho <code>fn_valida_especie</code></td></tr>
+    <tr><td>Aplicar vacina V10 (só cão) em um gato</td><td>gatilho <code>fn_valida_especie</code></td></tr>
   </tbody>
 </table>
 
@@ -346,7 +362,7 @@
 
 <!-- ============================== 7 ============================== -->
 <h2 id="s7">Consultas complementares</h2>
-<p>Quatro consultas extras, também em <code>03_consultas.sql</code>, cobrem necessidades comuns da clínica e exercitam outros recursos do SQL.</p>
+<p>Cinco consultas extras, também em <code>03_consultas.sql</code>, cobrem necessidades comuns da clínica e exercitam outros recursos do SQL.</p>
 
 <h3 class="q">C1. Prontuário de um animal</h3>
 <p>Usa a visão <code>vw_historico_clinico</code>, que consolida procedimentos e prescrições de cada atendimento com <code>LEFT JOIN LATERAL</code> e <code>string_agg</code>. Os atendimentos sem itens continuam aparecendo. A consulta só filtra pelo animal informado em <code>params</code>.</p>
@@ -367,6 +383,18 @@
 <p>Distribuição dos agendamentos por status em uma única passada sobre a tabela, usando agregações condicionais com <code>FILTER</code>.</p>
 {{SQL:C4}}
 <div class="result-box">{{RES:C4}}</div>
+
+<h3 class="q">C5. Itens restritos por espécie</h3>
+<p>Mostra, para cada espécie, os procedimentos e medicamentos que têm restrição e a incluem. Usa dois <code>LEFT JOIN</code> independentes e <code>string_agg(DISTINCT ...)</code> para não repetir itens, já que as duas junções se multiplicam.</p>
+{{SQL:C5}}
+<div class="result-box">{{RES:C5}}</div>
+
+<h2 id="s7b">Interface web</h2>
+<p>Para demonstrar o banco em uso, foi feita uma interface web em <b>Node.js</b> (Express e o driver <code>pg</code>), com front-end em HTML, CSS e JavaScript sem framework. Ela fica na pasta <code>app/</code> e roda com <code>npm install</code> e <code>npm start</code>. As telas usam as mesmas visões e consultas deste relatório.</p>
+<p>A interface não reimplementa as regras de negócio: ela envia os comandos ao PostgreSQL e, quando o banco recusa (CPF inválido, conflito de agenda, motivo de cancelamento ausente), mostra a mensagem correspondente na tela. Assim, as garantias valem tanto para a interface quanto para o pgAdmin.</p>
+<figure class="full"><img src="../screenshots/painel.png" alt="Tela do painel"><figcaption><b>Figura 3.</b> Painel: pacientes em atendimento (consulta Q1) e próximos horários agrupados por dia.</figcaption></figure>
+<figure class="full"><img src="../screenshots/prontuario.png" alt="Prontuário"><figcaption><b>Figura 4.</b> Prontuário montado a partir da visão <code>vw_historico_clinico</code>, com procedimentos (+), prescrições (℞) e variação de peso.</figcaption></figure>
+<figure class="full"><img src="../screenshots/cpf.png" alt="Cadastro com CPF inválido"><figcaption><b>Figura 5.</b> Cadastro de tutor recusado pelo banco por CPF inválido (restrição <code>ck_tutor_cpf</code>).</figcaption></figure>
 
 <!-- ============================== 8 ============================== -->
 <h2 id="s8">Considerações finais</h2>

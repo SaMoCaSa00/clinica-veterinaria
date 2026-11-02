@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clínica Veterinária</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topo">
+    <a class="marca" href="#/painel">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 27c-5 0-9-2.6-9-6.2 0-3.4 4-6.8 9-6.8s9 3.4 9 6.8c0 3.6-4 6.2-9 6.2Z"/><ellipse cx="7" cy="11.5" rx="2.6" ry="3.4"/><ellipse cx="12.6" cy="6.8" rx="2.6" ry="3.4"/><ellipse cx="19.4" cy="6.8" rx="2.6" ry="3.4"/><ellipse cx="25" cy="11.5" rx="2.6" ry="3.4"/></svg>
+      <span>Clínica Veterinária</span>
+    </a>
+    <nav aria-label="Seções">
+      <a href="#/painel">Painel</a>
+      <a href="#/agenda">Agenda</a>
+      <a href="#/animais">Animais</a>
+      <a href="#/tutores">Tutores</a>
+      <a href="#/relatorios">Relatórios</a>
+    </nav>
+  </header>
+
+  <main id="conteudo" tabindex="-1"></main>
+
+  <!-- Formulários em janelas (dialog). Preenchidos pelo app.js. -->
+  <dialog id="janela">
+    <form method="dialog" id="janela-form">
+      <header>
+        <h2 id="janela-titulo"></h2>
+        <button type="button" class="fechar" aria-label="Fechar" data-fechar>×</button>
+      </header>
+      <div id="janela-corpo"></div>
+      <p class="erro" id="janela-erro" role="alert" hidden></p>
+      <footer>
+        <button type="button" class="botao secundario" data-fechar>Voltar</button>
+        <button type="submit" class="botao" id="janela-ok"></button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="aviso" role="status" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

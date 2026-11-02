@@ -26,6 +26,58 @@ SET search_path TO clinica, public;
 -- É uma extensão "trusted": o dono do banco pode instalá-la sem superusuário.
 CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
 
+-- -----------------------------------------------------------------------------
+-- Validação de CPF (dígitos verificadores, módulo 11)
+--  Criada antes das tabelas porque é usada nos CHECK de tutor e veterinário.
+--  IMMUTABLE: o resultado depende só da entrada, requisito para uso em CHECK.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION cpf_valido(p_cpf TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE STRICT AS
+$$
+DECLARE
+    d     INT[];
+    soma  INT;
+    dv    INT;
+BEGIN
+    -- formato: exatamente 11 dígitos
+    IF p_cpf !~ '^[0-9]{11}$' THEN
+        RETURN FALSE;
+    END IF;
+
+    -- sequências repetidas (000..., 111...) passam na conta, mas são inválidas
+    IF p_cpf ~ '^(.)\1{10}$' THEN
+        RETURN FALSE;
+    END IF;
+
+    d := string_to_array(p_cpf, NULL)::INT[];   -- '123...' -> {1,2,3,...}
+
+    -- 1º dígito verificador: pesos 10..2 sobre os 9 primeiros dígitos
+    soma := 0;
+    FOR i IN 1..9 LOOP
+        soma := soma + d[i] * (11 - i);
+    END LOOP;
+    dv := (soma * 10) % 11;
+    IF dv = 10 THEN dv := 0; END IF;
+    IF dv <> d[10] THEN
+        RETURN FALSE;
+    END IF;
+
+    -- 2º dígito verificador: pesos 11..2 sobre os 10 primeiros dígitos
+    soma := 0;
+    FOR i IN 1..10 LOOP
+        soma := soma + d[i] * (12 - i);
+    END LOOP;
+    dv := (soma * 10) % 11;
+    IF dv = 10 THEN dv := 0; END IF;
+
+    RETURN dv = d[11];
+END;
+$$;
+COMMENT ON FUNCTION cpf_valido(TEXT) IS
+    'TRUE se o CPF (11 dígitos, sem máscara) tem dígitos verificadores válidos e não é uma sequência repetida.';
+
 
 -- =============================================================================
 -- 1. TABELAS DE DOMÍNIO / CATÁLOGO
@@ -108,6 +160,39 @@ COMMENT ON TABLE  medicamento              IS 'Catálogo de medicamentos (cada l
 COMMENT ON COLUMN medicamento.concentracao IS 'Ex.: "50 mg", "10 mg/mL".';
 COMMENT ON COLUMN medicamento.controlado   IS 'TRUE para substâncias sujeitas a controle especial (receita retida).';
 
+-- 1.6 Espécies indicadas para cada procedimento (N:N) ----------------------
+--  Regra: procedimento SEM linhas aqui vale para qualquer espécie (ex.: consulta,
+--  hemograma). Procedimento COM linhas só pode ser feito nas espécies listadas
+--  (ex.: vacina V10 só em cão). Garantido pelo gatilho trg_atproc_valida_especie.
+CREATE TABLE procedimento_especie (
+    id_procedimento INTEGER  NOT NULL,
+    id_especie      SMALLINT NOT NULL,
+
+    CONSTRAINT pk_procedimento_especie PRIMARY KEY (id_procedimento, id_especie),
+    CONSTRAINT fk_procesp_procedimento FOREIGN KEY (id_procedimento)
+        REFERENCES procedimento (id_procedimento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_procesp_especie      FOREIGN KEY (id_especie)
+        REFERENCES especie (id_especie)           ON UPDATE CASCADE ON DELETE RESTRICT
+);
+COMMENT ON TABLE procedimento_especie IS
+    'Restringe um procedimento às espécies listadas. Sem linhas = permitido para todas as espécies.';
+
+-- 1.7 Espécies indicadas para cada medicamento (N:N) -----------------------
+--  Mesma regra: medicamento sem linhas aqui é de uso geral; com linhas, só pode
+--  ser prescrito para as espécies listadas (ex.: Simparic só para cão).
+CREATE TABLE medicamento_especie (
+    id_medicamento INTEGER  NOT NULL,
+    id_especie     SMALLINT NOT NULL,
+
+    CONSTRAINT pk_medicamento_especie PRIMARY KEY (id_medicamento, id_especie),
+    CONSTRAINT fk_medesp_medicamento  FOREIGN KEY (id_medicamento)
+        REFERENCES medicamento (id_medicamento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_medesp_especie      FOREIGN KEY (id_especie)
+        REFERENCES especie (id_especie)         ON UPDATE CASCADE ON DELETE RESTRICT
+);
+COMMENT ON TABLE medicamento_especie IS
+    'Restringe um medicamento às espécies listadas. Sem linhas = permitido para todas as espécies.';
+
 
 -- =============================================================================
 -- 2. PESSOAS E ANIMAIS
@@ -133,14 +218,14 @@ CREATE TABLE tutor (
     CONSTRAINT pk_tutor          PRIMARY KEY (id_tutor),
     CONSTRAINT uq_tutor_cpf      UNIQUE (cpf),
     CONSTRAINT uq_tutor_email    UNIQUE (email),
-    CONSTRAINT ck_tutor_cpf      CHECK (cpf ~ '^[0-9]{11}$'),
+    CONSTRAINT ck_tutor_cpf      CHECK (cpf_valido(cpf)),
     CONSTRAINT ck_tutor_telefone CHECK (telefone ~ '^[0-9]{10,11}$'),
     CONSTRAINT ck_tutor_email    CHECK (email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
     CONSTRAINT ck_tutor_uf       CHECK (uf ~ '^[A-Z]{2}$'),
     CONSTRAINT ck_tutor_cep      CHECK (cep ~ '^[0-9]{8}$')
 );
 COMMENT ON TABLE  tutor          IS 'Responsável legal e financeiro pelos animais.';
-COMMENT ON COLUMN tutor.cpf      IS 'CPF somente com dígitos (11). Chave candidata.';
+COMMENT ON COLUMN tutor.cpf      IS 'CPF somente com dígitos (11), validado por cpf_valido(). Chave candidata.';
 COMMENT ON COLUMN tutor.telefone IS 'DDD + número, somente dígitos (10 ou 11).';
 COMMENT ON COLUMN tutor.cep      IS 'CEP somente com dígitos (8).';
 
@@ -191,7 +276,7 @@ CREATE TABLE veterinario (
     CONSTRAINT uq_veterinario_cpf   UNIQUE (cpf),
     CONSTRAINT uq_veterinario_crmv  UNIQUE (uf_crmv, crmv),
     CONSTRAINT uq_veterinario_email UNIQUE (email),
-    CONSTRAINT ck_veterinario_cpf   CHECK (cpf ~ '^[0-9]{11}$'),
+    CONSTRAINT ck_veterinario_cpf   CHECK (cpf_valido(cpf)),
     CONSTRAINT ck_veterinario_crmv  CHECK (crmv ~ '^[0-9]{1,8}$'),
     CONSTRAINT ck_veterinario_uf    CHECK (uf_crmv ~ '^[A-Z]{2}$'),
     CONSTRAINT ck_veterinario_tel   CHECK (telefone ~ '^[0-9]{10,11}$')
@@ -363,6 +448,8 @@ CREATE INDEX ix_agendamento_animal      ON agendamento (id_animal);
 CREATE INDEX ix_atproc_procedimento     ON atendimento_procedimento (id_procedimento);
 CREATE INDEX ix_prescricao_medicamento  ON prescricao (id_medicamento);
 CREATE INDEX ix_vetesp_especialidade    ON veterinario_especialidade (id_especialidade);
+CREATE INDEX ix_procesp_especie         ON procedimento_especie (id_especie);
+CREATE INDEX ix_medesp_especie          ON medicamento_especie (id_especie);
 
 -- Histórico clínico: "atendimentos do animal X, do mais recente ao mais antigo"
 CREATE INDEX ix_atendimento_animal_data ON atendimento (id_animal, data_hora_inicio DESC);
@@ -501,6 +588,66 @@ COMMENT ON FUNCTION fn_agendamento_valida_status() IS
 CREATE TRIGGER trg_agendamento_valida_status
     BEFORE UPDATE OF status ON agendamento
     FOR EACH ROW EXECUTE FUNCTION fn_agendamento_valida_status();
+
+-- 5.5 Procedimento e medicamento compatíveis com a espécie ----------------
+--  Uma única função atende às duas tabelas: TG_TABLE_NAME diz qual disparou.
+--  A espécie do paciente é obtida pela cadeia atendimento -> animal -> raça.
+CREATE OR REPLACE FUNCTION fn_valida_especie()
+RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+DECLARE
+    v_id_especie especie.id_especie%TYPE;
+    v_especie    especie.nome%TYPE;
+    v_animal     animal.nome%TYPE;
+    v_item       TEXT;
+BEGIN
+    SELECT e.id_especie, e.nome, an.nome
+      INTO v_id_especie, v_especie, v_animal
+      FROM atendimento at
+      JOIN animal  an ON an.id_animal  = at.id_animal
+      JOIN raca    r  ON r.id_raca     = an.id_raca
+      JOIN especie e  ON e.id_especie  = r.id_especie
+     WHERE at.id_atendimento = NEW.id_atendimento;
+
+    IF TG_TABLE_NAME = 'atendimento_procedimento' THEN
+        -- restrito (tem linhas) E a espécie do animal não está entre elas
+        IF EXISTS (SELECT 1 FROM procedimento_especie
+                    WHERE id_procedimento = NEW.id_procedimento)
+           AND NOT EXISTS (SELECT 1 FROM procedimento_especie
+                            WHERE id_procedimento = NEW.id_procedimento
+                              AND id_especie      = v_id_especie) THEN
+            SELECT nome INTO v_item FROM procedimento WHERE id_procedimento = NEW.id_procedimento;
+            RAISE EXCEPTION 'O procedimento "%" não é indicado para a espécie % (animal: %).',
+                            v_item, v_especie, v_animal
+                  USING ERRCODE = 'check_violation';
+        END IF;
+    ELSE  -- prescricao
+        IF EXISTS (SELECT 1 FROM medicamento_especie
+                    WHERE id_medicamento = NEW.id_medicamento)
+           AND NOT EXISTS (SELECT 1 FROM medicamento_especie
+                            WHERE id_medicamento = NEW.id_medicamento
+                              AND id_especie     = v_id_especie) THEN
+            SELECT nome_comercial INTO v_item FROM medicamento WHERE id_medicamento = NEW.id_medicamento;
+            RAISE EXCEPTION 'O medicamento "%" não é indicado para a espécie % (animal: %).',
+                            v_item, v_especie, v_animal
+                  USING ERRCODE = 'check_violation';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+COMMENT ON FUNCTION fn_valida_especie() IS
+    'Barra procedimento ou prescrição incompatível com a espécie do animal atendido.';
+
+CREATE TRIGGER trg_atproc_valida_especie
+    BEFORE INSERT OR UPDATE OF id_procedimento, id_atendimento ON atendimento_procedimento
+    FOR EACH ROW EXECUTE FUNCTION fn_valida_especie();
+
+CREATE TRIGGER trg_prescricao_valida_especie
+    BEFORE INSERT OR UPDATE OF id_medicamento, id_atendimento ON prescricao
+    FOR EACH ROW EXECUTE FUNCTION fn_valida_especie();
 
 
 -- =============================================================================
