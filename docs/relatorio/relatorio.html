@@ -63,8 +63,8 @@
     <tr><td>RN02</td><td>Todo animal tem uma raça, e toda raça pertence a uma espécie. Animais sem raça definida usam a raça “SRD” da sua espécie.</td><td>FKs <code>NOT NULL</code>; <code>UNIQUE (id_especie, nome)</code> em <code>raca</code></td></tr>
     <tr><td>RN03</td><td>Um atendimento é realizado por <b>um</b> veterinário e gera <b>zero ou mais</b> procedimentos e prescrições.</td><td>FK <code>NOT NULL</code>; tabelas associativas</td></tr>
     <tr><td>RN04</td><td>O agendamento tem status <code>AGENDADO</code>, <code>REALIZADO</code> ou <code>CANCELADO</code>; cancelar exige motivo.</td><td><code>CHECK</code> de domínio e <code>CHECK</code> condicional</td></tr>
-    <tr><td>RN05</td><td>Um veterinário não pode ter dois horários ativos sobrepostos.</td><td>Restrição de exclusão GiST</td></tr>
-    <tr><td>RN06</td><td>Um agendamento gera no máximo um atendimento, do <b>mesmo animal</b>; ao gerar, passa a <code>REALIZADO</code>. Agendamento cancelado não gera atendimento.</td><td><code>UNIQUE</code> + FK composta + gatilhos</td></tr>
+    <tr><td>RN05</td><td>Um veterinário não pode ter dois horários ativos sobrepostos.</td><td>Gatilho <code>fn_agendamento_conflito</code></td></tr>
+    <tr><td>RN06</td><td>Um agendamento gera no máximo um atendimento, do <b>mesmo animal</b>; ao gerar, passa a <code>REALIZADO</code>. Agendamento cancelado não gera atendimento.</td><td><code>UNIQUE</code> + gatilhos</td></tr>
     <tr><td>RN07</td><td>Atendimento é <code>EM_ABERTO</code> ou <code>FINALIZADO</code>; só o finalizado tem data/hora de término.</td><td><code>CHECK</code> de coerência</td></tr>
     <tr><td>RN08</td><td>O valor cobrado de um procedimento é o da data do atendimento; reajustes de tabela não alteram o histórico.</td><td>Coluna <code>valor_unitario</code> + gatilho de preço padrão</td></tr>
     <tr><td>RN09</td><td>Animais com óbito registrado não recebem novos atendimentos; o histórico é preservado.</td><td>Gatilho + <code>ON DELETE RESTRICT</code></td></tr>
@@ -128,7 +128,7 @@
 <p>ESPECIALIDADE (<u>id_especialidade</u>, nome<sup>U</sup>)</p>
 <p>VETERINARIO_ESPECIALIDADE (<u><i>id_veterinario</i></u> → VETERINARIO, <u><i>id_especialidade</i></u> → ESPECIALIDADE)</p>
 <p>AGENDAMENTO (<u>id_agendamento</u>, <i>id_animal</i> → ANIMAL, <i>id_veterinario</i> → VETERINARIO, data_hora_inicio, data_hora_fim, tipo, motivo, status, motivo_cancelamento, criado_em)</p>
-<p>ATENDIMENTO (<u>id_atendimento</u>, <i>id_animal</i> → ANIMAL, <i>id_veterinario</i> → VETERINARIO, <i>id_agendamento</i><sup>U</sup>, data_hora_inicio, data_hora_fim, carater, status, queixa_principal, anamnese, exame_fisico, diagnostico, peso_kg, temperatura_c, observacoes) — (<i>id_agendamento, id_animal</i>) → AGENDAMENTO(id_agendamento, id_animal)</p>
+<p>ATENDIMENTO (<u>id_atendimento</u>, <i>id_animal</i> → ANIMAL, <i>id_veterinario</i> → VETERINARIO, <i>id_agendamento</i><sup>U</sup> → AGENDAMENTO, data_hora_inicio, data_hora_fim, carater, status, queixa_principal, anamnese, exame_fisico, diagnostico, peso_kg, temperatura_c, observacoes)</p>
 <p>PROCEDIMENTO (<u>id_procedimento</u>, nome<sup>U</sup>, categoria, descricao, preco_base, ativo)</p>
 <p>ATENDIMENTO_PROCEDIMENTO (<u><i>id_atendimento</i></u> → ATENDIMENTO, <u><i>id_procedimento</i></u> → PROCEDIMENTO, quantidade, valor_unitario, observacao)</p>
 <p>PROCEDIMENTO_ESPECIE (<u><i>id_procedimento</i></u> → PROCEDIMENTO, <u><i>id_especie</i></u> → ESPECIE)</p>
@@ -148,15 +148,14 @@
 <table class="data">
   <thead><tr><th>Tipo</th><th>Onde</th><th>Finalidade</th></tr></thead>
   <tbody>
-    <tr><td>Entidade (PK)</td><td>Todas as tabelas</td><td>Chave substituta <code>IDENTITY</code>; PK composta nas associativas puras (<code>veterinario_especialidade</code>, <code>atendimento_procedimento</code>).</td></tr>
+    <tr><td>Entidade (PK)</td><td>Todas as tabelas</td><td>Chave substituta <code>SERIAL</code>; PK composta nas tabelas associativas (<code>veterinario_especialidade</code>, <code>atendimento_procedimento</code>, <code>procedimento_especie</code>, <code>medicamento_especie</code>).</td></tr>
     <tr><td>Chaves candidatas</td><td>cpf, email, crmv+UF, microchip, nomes de catálogo</td><td>Impedem cadastros duplicados no mundo real mesmo com PK artificial.</td></tr>
     <tr><td>Referencial (FK)</td><td>18 chaves estrangeiras</td><td><code>RESTRICT</code> onde há histórico a preservar; <code>CASCADE</code> só em itens que não existem sem o pai (procedimentos e prescrições do atendimento, especialidades do veterinário, agenda do animal).</td></tr>
-    <tr><td>FK composta</td><td><code>atendimento (id_agendamento, id_animal)</code></td><td>Garante que o atendimento vinculado a um horário seja do mesmo animal do horário (RN06).</td></tr>
     <tr><td>Domínio (CHECK)</td><td>status, tipo, caráter, categoria, sexo, porte, via, unidade, UF</td><td>Restringe colunas a valores válidos.</td></tr>
-    <tr><td>Formato (CHECK)</td><td>CPF, telefone, CEP, e-mail, microchip, CRMV</td><td>Expressões regulares: só dígitos e no tamanho certo. O CPF vai além do formato: a função <code>cpf_valido()</code> confere os dois dígitos verificadores (módulo 11).</td></tr>
+    <tr><td>Formato (CHECK)</td><td>CPF, telefone, CEP, e-mail, microchip, CRMV</td><td>Tamanho certo com <code>LENGTH</code> (telefone com 10 ou 11 dígitos, CEP com 8, microchip com 15), e-mail com <code>LIKE '%_@_%._%'</code>, UF em maiúsculas. O CPF vai além do formato: a função <code>cpf_valido()</code> confere os dois dígitos verificadores (módulo 11).</td></tr>
     <tr><td>Semântica (CHECK)</td><td>agendamento, atendimento, animal, prescrição</td><td>Fim depois do início; cancelado ⇔ tem motivo; finalizado ⇔ tem fim; peso &gt; 0; temperatura entre 30 e 45 °C; óbito ≥ nascimento; duração do horário ≤ 8 h.</td></tr>
-    <tr><td>Exclusão (GiST)</td><td><code>agendamento</code></td><td>Mesmo veterinário + intervalos sobrepostos é proibido, ignorando cancelados (RN05).</td></tr>
-    <tr><td>Gatilhos</td><td>atendimento, agendamento, atendimento_procedimento</td><td>Regras que envolvem mais de uma tabela (RN06, RN08, RN09).</td></tr>
+    <tr><td>Not null nomeado</td><td>colunas obrigatórias</td><td><code>CONSTRAINT nn_... NOT NULL</code>, para que o erro diga qual campo faltou.</td></tr>
+    <tr><td>Gatilhos</td><td>agendamento, atendimento, atendimento_procedimento, prescricao</td><td>Regras que envolvem mais de uma linha ou mais de uma tabela: conflito de agenda (RN05), vínculo com agendamento (RN06), preço (RN08), óbito (RN09) e espécie (RN12).</td></tr>
   </tbody>
 </table>
 
@@ -175,25 +174,25 @@
 <ul>
   <li><code>animal</code> guarda apenas <code>id_raca</code>. Guardar também a espécie criaria a dependência transitiva id_animal → id_raca → id_especie; a espécie é obtida pela raça.</li>
   <li>Dados derivados não são armazenados: idade (calculada na visão <code>vw_animal</code>) e valor total do atendimento (soma dos itens).</li>
-  <li>Em <code>atendimento</code>, poderia parecer que id_agendamento → id_animal é transitiva. Mas <code>id_agendamento</code> é opcional (urgências não têm horário), então ele não determina o animal em todas as tuplas e <code>id_animal</code> precisa existir por si. A coerência entre os dois é garantida pela FK composta. O veterinário do atendimento também não é derivável do agendamento, porque outro profissional pode cobrir o horário.</li>
+  <li>Em <code>atendimento</code>, poderia parecer que id_agendamento → id_animal é transitiva. Mas <code>id_agendamento</code> é opcional (urgências não têm horário), então ele não determina o animal em todas as tuplas e <code>id_animal</code> precisa existir por si. A coerência entre os dois (o agendamento precisa ser do mesmo animal) é garantida pelo gatilho <code>fn_atendimento_vincula_agendamento</code>. O veterinário do atendimento também não é derivável do agendamento, porque outro profissional pode cobrir o horário.</li>
   <li><b>Endereço:</b> CEP → logradouro/bairro não é uma dependência funcional no Brasil, pois muitas cidades têm um CEP único para todas as ruas (por exemplo, 38440-000 em Araguari, presente nos dados). Do mesmo modo, cidade ↛ UF, porque há municípios homônimos em estados diferentes. Logo, não há transitividade a remover.</li>
 </ul>
 
 <p>Em todas as tabelas, os únicos determinantes são chaves candidatas, de modo que o esquema também atende à <b>Forma Normal de Boyce-Codd</b>.</p>
 
-<p class="callout"><b>Redundância controlada.</b> O status <code>REALIZADO</code> do agendamento pode ser deduzido da existência de um atendimento vinculado. Ele foi mantido de propósito porque a agenda é consultada o tempo todo e filtrar por uma coluna é mais simples e barato que fazer um anti-join. Para não haver divergência, o valor é mantido por gatilho (seção 4.4), e não pela aplicação.</p>
+<p class="callout"><b>Redundância controlada.</b> O status <code>REALIZADO</code> do agendamento pode ser deduzido da existência de um atendimento vinculado. Ele foi mantido de propósito porque a agenda é consultada o tempo todo e filtrar por uma coluna é mais simples e barato que fazer um anti-join. Para não haver divergência, o valor é mantido por gatilho (seção 4.5), e não pela aplicação.</p>
 
 <!-- ============================== 4 ============================== -->
 <h2 id="s4">Modelo físico</h2>
 
-<p>O SGBD é o <b>PostgreSQL</b>, como recomendado. Além de ser livre e padrão de mercado, ele oferece recursos que este projeto usa diretamente: <code>TIMESTAMPTZ</code>, colunas <code>IDENTITY</code> do padrão SQL, índices parciais e de expressão, restrições de exclusão com GiST, gatilhos em PL/pgSQL e comentários de catálogo. Todos os objetos ficam no esquema <code>clinica</code>, separado do <code>public</code>.</p>
+<p>O SGBD é o <b>PostgreSQL</b>, como recomendado. Além de ser livre e padrão de mercado, ele oferece os recursos que este projeto usa: esquemas, chaves <code>SERIAL</code>, restrições <code>CHECK</code> nomeadas, funções e gatilhos em PL/pgSQL, visões e comentários de catálogo (<code>COMMENT ON</code>). Todos os objetos ficam no esquema <code>clinica</code>, separado do <code>public</code>.</p>
 
 <h3>Tipos de dados</h3>
 <table class="data">
   <thead><tr><th>Dado</th><th>Tipo</th><th>Justificativa</th></tr></thead>
   <tbody>
-    <tr><td>Chaves primárias</td><td><code>INTEGER</code> / <code>SMALLINT</code> <code>GENERATED BY DEFAULT AS IDENTITY</code></td><td>IDENTITY é o padrão SQL e substitui o <code>SERIAL</code> legado: a sequência pertence à coluna. <code>SMALLINT</code> (2 bytes) nos catálogos que nunca passarão de dezenas de linhas (espécie, especialidade); <code>INTEGER</code> (4 bytes, até 2,1 bi) nas demais.</td></tr>
-    <tr><td>CPF, CEP, UF, microchip</td><td><code>CHAR(11)</code>, <code>CHAR(8)</code>, <code>CHAR(2)</code>, <code>CHAR(15)</code></td><td>Tamanho fixo por definição. São armazenados como texto, não como número, porque podem começar com zero e nunca entram em contas. O formato é validado por <code>CHECK</code> com expressão regular.</td></tr>
+    <tr><td>Chaves primárias</td><td><code>SERIAL</code></td><td>Inteiro de 4 bytes (até 2,1 bilhões) com sequência automática: cada novo registro recebe o próximo número, sem precisar informar o id no <code>INSERT</code>. As chaves estrangeiras que apontam para ele são <code>INTEGER</code>.</td></tr>
+    <tr><td>CPF, CEP, UF, microchip</td><td><code>CHAR(11)</code>, <code>CHAR(8)</code>, <code>CHAR(2)</code>, <code>CHAR(15)</code></td><td>Tamanho fixo por definição. São armazenados como texto, não como número, porque podem começar com zero e nunca entram em contas. O tamanho é validado por <code>CHECK</code> com <code>LENGTH</code>; o CPF, pela função <code>cpf_valido()</code>.</td></tr>
     <tr><td>Telefone</td><td><code>VARCHAR(11)</code></td><td>10 ou 11 dígitos (fixo ou celular com DDD), sem máscara. A formatação fica na apresentação.</td></tr>
     <tr><td>Nomes, e-mail, motivos</td><td><code>VARCHAR(n)</code></td><td>Limite explícito documenta o tamanho esperado e impede lixo. No PostgreSQL, <code>VARCHAR(n)</code> não ocupa mais espaço que o conteúdo.</td></tr>
     <tr><td>Anamnese, diagnóstico, instruções</td><td><code>TEXT</code></td><td>Texto clínico livre, sem limite natural de tamanho.</td></tr>
@@ -201,7 +200,7 @@
     <tr><td>Peso</td><td><code>NUMERIC(6,3)</code></td><td>Três casas decimais para pesar aves e roedores (o periquito dos dados pesa 0,035 kg); até 999,999 kg cobre cães gigantes.</td></tr>
     <tr><td>Temperatura</td><td><code>NUMERIC(3,1)</code></td><td>Uma casa decimal, faixa validada entre 30 e 45 °C.</td></tr>
     <tr><td>Dose</td><td><code>NUMERIC(8,3)</code> + <code>VARCHAR(10)</code></td><td>Doses fracionadas (0,25 comprimido; 0,4 mL) com unidade controlada por <code>CHECK</code>.</td></tr>
-    <tr><td>Data e hora de eventos</td><td><code>TIMESTAMPTZ</code></td><td>Guarda o instante absoluto (UTC) e exibe no fuso da sessão. Evita ambiguidade em mudanças de fuso ou horário de verão. O banco é configurado com <code>timezone = America/Sao_Paulo</code>.</td></tr>
+    <tr><td>Data e hora de eventos</td><td><code>TIMESTAMP</code></td><td>Data e hora juntas, para agenda e atendimentos. A clínica funciona em um único local, então o horário é guardado no horário local; o banco é configurado com <code>timezone = America/Sao_Paulo</code> para que <code>now()</code> também use o horário local.</td></tr>
     <tr><td>Nascimento, óbito, admissão</td><td><code>DATE</code></td><td>Hora não é relevante.</td></tr>
     <tr><td>Indicadores</td><td><code>BOOLEAN</code></td><td><code>castrado</code>, <code>ativo</code>, <code>controlado</code>, com <code>DEFAULT</code> definido.</td></tr>
     <tr><td>Status, tipo, categoria</td><td><code>VARCHAR</code> + <code>CHECK (... IN ...)</code></td><td>Preferido a <code>ENUM</code> porque incluir ou remover um valor é só trocar a restrição. Com <code>ENUM</code>, remover um valor exige recriar o tipo. Também é mais portável.</td></tr>
@@ -210,7 +209,7 @@
 
 <h3>Índices</h3>
 
-<p>O PostgreSQL cria índices B-tree automaticamente para PKs e <code>UNIQUE</code>, mas <b>não</b> para chaves estrangeiras. Os índices abaixo foram criados para cobrir FKs usadas em junções e os filtros das consultas da seção 6. No total, o esquema tem 43 índices, contando os automáticos.</p>
+<p>O PostgreSQL cria índices B-tree automaticamente para PKs e <code>UNIQUE</code>, mas <b>não</b> para chaves estrangeiras. Os índices abaixo foram criados para cobrir FKs usadas em junções e os filtros das consultas da seção 6. No total, o esquema tem {{NIDX}} índices, contando os automáticos.</p>
 
 <table class="data idx">
   <thead><tr><th>Índice</th><th>Colunas / tipo</th><th>Justificativa</th></tr></thead>
@@ -218,13 +217,13 @@
     <tr><td><code>ix_animal_tutor</code></td><td>animal (id_tutor)</td><td>“Animais do tutor” (Q3) e verificação da FK ao remover tutores.</td></tr>
     <tr><td><code>ix_animal_raca</code></td><td>animal (id_raca)</td><td>Junção animal → raça → espécie (Q4, visões).</td></tr>
     <tr><td><code>ix_agendamento_animal</code></td><td>agendamento (id_animal)</td><td>Agenda de um animal; suporte ao <code>ON DELETE CASCADE</code>.</td></tr>
-    <tr><td><code>ix_atendimento_animal_data</code></td><td>atendimento (id_animal, data_hora_inicio DESC)</td><td>Composto: monta o histórico clínico já na ordem “mais recente primeiro”, sem etapa de ordenação. Também cobre a FK <code>id_animal</code>.</td></tr>
+    <tr><td><code>ix_atendimento_animal_data</code></td><td>atendimento (id_animal, data_hora_inicio)</td><td>Composto: busca os atendimentos de um animal já ordenados por data (histórico clínico). Também cobre a FK <code>id_animal</code>.</td></tr>
     <tr><td><code>ix_atendimento_vet_data</code></td><td>atendimento (id_veterinario, data_hora_inicio)</td><td>Composto: o ranking por período (Q2) filtra por veterinário e faixa de datas. A igualdade vem primeiro e o intervalo depois, que é a ordem que o B-tree aproveita.</td></tr>
-    <tr><td><code>ix_agendamento_futuro</code></td><td>agendamento (data_hora_inicio) WHERE status = 'AGENDADO'</td><td><b>Parcial</b>: só indexa horários pendentes, que são poucos perto do histórico de realizados e cancelados. Atende Q1 e a tela de agenda.</td></tr>
-    <tr><td><code>ix_atendimento_em_aberto</code></td><td>atendimento (id_animal) WHERE status = 'EM_ABERTO'</td><td><b>Parcial</b>: atendimentos em aberto são uma fração mínima da tabela (Q1, painel de internados).</td></tr>
-    <tr><td><code>ix_tutor_nome_lower</code></td><td>tutor (lower(nome) text_pattern_ops)</td><td><b>De expressão</b>: busca no balcão por <code>lower(nome) LIKE 'mar%'</code>, sem diferenciar maiúsculas.</td></tr>
+    <tr><td><code>ix_agendamento_vet_data</code></td><td>agendamento (id_veterinario, data_hora_inicio)</td><td>Agenda de cada veterinário. É o índice usado pelo gatilho de conflito de horário, que roda a cada novo agendamento.</td></tr>
+    <tr><td><code>ix_agendamento_status_data</code></td><td>agendamento (status, data_hora_inicio)</td><td>Q1 e painel: horários com status <code>AGENDADO</code> a partir de agora.</td></tr>
+    <tr><td><code>ix_atendimento_status</code></td><td>atendimento (status)</td><td>Q1 e painel: atendimentos/internações <code>EM_ABERTO</code>.</td></tr>
+    <tr><td><code>ix_tutor_nome</code></td><td>tutor (nome)</td><td>Busca de tutor pelo nome no balcão (<code>LIKE 'Mar%'</code>).</td></tr>
     <tr><td><code>ix_atproc_procedimento</code><br><code>ix_prescricao_medicamento</code><br><code>ix_vetesp_especialidade</code><br><code>ix_procesp_especie</code><br><code>ix_medesp_especie</code></td><td>2ª coluna das associativas</td><td>A PK composta só serve buscas pela 1ª coluna. Esses índices cobrem o caminho inverso, como “onde este medicamento foi prescrito” (Q4), além de verificações de FK.</td></tr>
-    <tr><td><code>ex_agendamento_conflito_vet</code></td><td>GiST (id_veterinario, tstzrange(início, fim))</td><td>Criado pela restrição de exclusão. Além de impedir conflitos, acelera “horários do veterinário que se sobrepõem a X”.</td></tr>
   </tbody>
 </table>
 
@@ -233,11 +232,11 @@
 <h3>Outras decisões de implementação</h3>
 <ul>
   <li><b>Exclusão lógica.</b> Veterinários e procedimentos têm <code>ativo</code>; animais têm <code>data_obito</code>. Com FKs <code>RESTRICT</code>, o banco impede apagar quem tem histórico.</li>
-  <li><b>Scripts idempotentes e transacionais.</b> <code>01_ddl.sql</code> recria o esquema do zero e todo o DDL e DML roda entre <code>BEGIN</code> e <code>COMMIT</code>: se algo falhar, nada fica pela metade.</li>
+  <li><b>Script reexecutável.</b> <code>01_ddl.sql</code> começa com <code>DROP SCHEMA IF EXISTS clinica CASCADE</code> e recria tudo, então pode ser rodado várias vezes durante o desenvolvimento.</li>
   <li><b>Documentação no catálogo.</b> Tabelas, colunas, índices, funções e visões têm <code>COMMENT ON</code>, visível no pgAdmin (aba <i>Properties</i>) e em ferramentas de documentação.</li>
-  <li><b>Nomes de restrições padronizados</b> (<code>pk_</code>, <code>fk_</code>, <code>uq_</code>, <code>ck_</code>, <code>ex_</code>, <code>ix_</code>), o que torna as mensagens de erro autoexplicativas.</li>
+  <li><b>Nomes de restrições padronizados</b> (<code>pk_</code>, <code>fk_</code>, <code>uq_</code>, <code>ck_</code>, <code>nn_</code>, <code>ix_</code>), o que torna as mensagens de erro autoexplicativas.</li>
   <li><b>Visões</b> <code>vw_animal</code> (animal + raça + espécie + idade + tutor) e <code>vw_historico_clinico</code> (prontuário consolidado) encapsulam junções frequentes.</li>
-  <li><b>Extensão <code>btree_gist</code></b>, necessária para combinar <code>=</code> e <code>&amp;&amp;</code> na mesma restrição de exclusão. É uma extensão <i>trusted</i>: o dono do banco a instala sem precisar de superusuário.</li>
+  <li><b>Conflito de agenda por gatilho.</b> Antes de gravar um horário, o gatilho <code>fn_agendamento_conflito</code> procura, com <code>EXISTS</code>, outro horário ativo do mesmo veterinário que se sobreponha. Dois intervalos [A, B) e [C, D) se sobrepõem quando <code>A &lt; D</code> e <code>C &lt; B</code>.</li>
 </ul>
 
 <h3>Exemplo de DDL: tabela de agendamento</h3>
@@ -248,17 +247,18 @@
 <table class="data">
   <thead><tr><th>Gatilho</th><th>Momento</th><th>Regra</th></tr></thead>
   <tbody>
-    <tr><td><code>trg_atendimento_vincula_agendamento</code></td><td>AFTER INSERT/UPDATE em atendimento</td><td>Barra atendimento de agendamento cancelado e marca o agendamento como REALIZADO (RN06).</td></tr>
+    <tr><td><code>trg_agendamento_conflito</code></td><td>BEFORE INSERT/UPDATE em agendamento</td><td>Barra horário que se sobrepõe a outro do mesmo veterinário (RN05).</td></tr>
+    <tr><td><code>trg_atendimento_vincula_agendamento</code></td><td>AFTER INSERT/UPDATE em atendimento</td><td>Confere se o agendamento é do mesmo animal e não está cancelado, e o marca como REALIZADO (RN06).</td></tr>
     <tr><td><code>trg_agendamento_valida_status</code></td><td>BEFORE UPDATE em agendamento</td><td>Agendamento que já gerou atendimento não pode ser cancelado nem reaberto (RN06).</td></tr>
     <tr><td><code>trg_atendimento_valida_animal</code></td><td>BEFORE INSERT/UPDATE em atendimento</td><td>Barra atendimento com data posterior ao óbito (RN09).</td></tr>
-    <tr><td><code>trg_atproc_valida_especie</code><br><code>trg_prescricao_valida_especie</code></td><td>BEFORE INSERT/UPDATE em atendimento_procedimento e prescricao</td><td>Barra procedimento ou medicamento não indicado para a espécie do animal (RN12). Uma só função atende às duas tabelas, usando <code>TG_TABLE_NAME</code>.</td></tr>
+    <tr><td><code>trg_atproc_valida_especie</code><br><code>trg_prescricao_valida_especie</code></td><td>BEFORE INSERT/UPDATE em atendimento_procedimento e prescricao</td><td>Barra procedimento ou medicamento não indicado para a espécie do animal (RN12). Usa <code>EXISTS</code> e <code>NOT IN</code> com subconsulta.</td></tr>
     <tr><td><code>trg_atproc_preco_padrao</code></td><td>BEFORE INSERT em atendimento_procedimento</td><td>Se o valor não for informado, usa o preço de tabela vigente (RN08).</td></tr>
   </tbody>
 </table>
-{{FUNC:fn_atendimento_vincula_agendamento}}
+{{FUNC:fn_agendamento_conflito}}
 
 <h3>Validação de CPF</h3>
-<p>A função <code>cpf_valido()</code> é <code>IMMUTABLE</code> (o resultado depende só da entrada), requisito para ser usada em <code>CHECK</code>. Ela rejeita sequências repetidas, que passariam na conta, e calcula os dois dígitos verificadores com pesos decrescentes e módulo 11:</p>
+<p>A função <code>cpf_valido()</code> é usada no <code>CHECK</code> de tutor e veterinário. Primeiro confere se há 11 caracteres e se todos são dígitos (<code>TRANSLATE</code> apaga os dígitos; se sobrar algo, havia outro caractere). Depois rejeita sequências repetidas, que passariam na conta, e calcula os dois dígitos verificadores com <code>SUBSTR</code>, pesos decrescentes e módulo 11:</p>
 {{FUNC2:cpf_valido}}
 
 <!-- ============================== 5 ============================== -->
@@ -268,9 +268,9 @@
   <thead><tr><th>Arquivo</th><th>Conteúdo</th></tr></thead>
   <tbody>
     <tr><td><code>sql/00_criar_banco.sql</code></td><td>Cria o banco <code>clinica_vet</code> (UTF-8) e define o fuso. Roda conectado ao banco <code>postgres</code>, pois <code>CREATE DATABASE</code> não pode estar dentro de uma transação.</td></tr>
-    <tr><td><code>sql/01_ddl.sql</code></td><td>Esquema, extensão, função de validação de CPF, 15 tabelas com todas as restrições, índices, 5 funções de gatilho, 2 visões e comentários.</td></tr>
-    <tr><td><code>sql/02_dml.sql</code></td><td>Carga de dados, ajuste das sequências, 7 exemplos de UPDATE, 3 de DELETE e 10 testes de integridade comentados.</td></tr>
-    <tr><td><code>sql/03_consultas.sql</code></td><td>As 5 consultas obrigatórias e 5 complementares.</td></tr>
+    <tr><td><code>sql/01_ddl.sql</code></td><td>Esquema, função de validação de CPF, 15 tabelas com todas as restrições, índices, 7 funções de gatilho, 2 visões e comentários.</td></tr>
+    <tr><td><code>sql/02_dml.sql</code></td><td>Carga de dados, 7 exemplos de UPDATE, 3 de DELETE e 10 testes de integridade comentados.</td></tr>
+    <tr><td><code>sql/03_consultas.sql</code></td><td>As 5 consultas obrigatórias e 7 complementares.</td></tr>
   </tbody>
 </table>
 
@@ -278,7 +278,7 @@
 <div class="two-col">
 <div>
 <p>Os dados cobrem de janeiro de 2026 a janeiro de 2027: 30 atendimentos já realizados (quatro deles urgências ou emergências sem agendamento), duas internações em aberto, agendamentos futuros, cancelamentos com motivo, casos de não comparecimento, um óbito, um veterinário desligado e um procedimento descontinuado. A distribuição foi pensada para que cada consulta tenha resultado interessante: há empates no ranking, tutores com três animais, cinco espécies e pacientes de alto custo.</p>
-<p>Os CPFs têm dígitos verificadores válidos, mas foram gerados aleatoriamente. As chaves são informadas na carga para deixar as referências legíveis, e as sequências <code>IDENTITY</code> são reposicionadas com <code>setval</code> ao final.</p>
+<p>Os CPFs têm dígitos verificadores válidos, mas foram gerados aleatoriamente. As chaves <code>SERIAL</code> são geradas na ordem de inserção (o 1º tutor recebe id 1, o 2º id 2...), e as chaves estrangeiras da carga seguem essa ordem.</p>
 </div>
 <div>{{CONTAGEM}}</div>
 </div>
@@ -287,13 +287,13 @@
 <table class="data">
   <thead><tr><th>#</th><th>Situação</th><th>O que demonstra</th></tr></thead>
   <tbody>
-    <tr><td>8.1</td><td>Exame do Simba concluído: atendimento finalizado com laudo.</td><td>Transição EM_ABERTO → FINALIZADO respeitando o <code>CHECK</code> de coerência.</td></tr>
-    <tr><td>8.2</td><td>Registro do óbito do Frajola.</td><td>Exclusão lógica; concatenação em texto.</td></tr>
-    <tr><td>8.3</td><td>Cancelar os agendamentos futuros de animais com óbito.</td><td><code>UPDATE ... FROM</code> com junção.</td></tr>
-    <tr><td>8.4</td><td>Marcar como cancelados (no-show) os horários passados sem atendimento.</td><td><code>UPDATE</code> com <code>NOT EXISTS</code>.</td></tr>
-    <tr><td>8.5</td><td>Reajuste de 8% nas vacinas.</td><td>Atualização em massa; o histórico não muda (RN08).</td></tr>
-    <tr><td>8.6</td><td>Desligamento do Dr. Fábio.</td><td>Inativação em vez de exclusão (RN10).</td></tr>
-    <tr><td>8.7</td><td>Tutor trocou telefone e e-mail.</td><td>Atualização localizada pela chave candidata (CPF).</td></tr>
+    <tr><td>7.1</td><td>Exame do Simba concluído: atendimento finalizado com laudo.</td><td>Transição EM_ABERTO → FINALIZADO respeitando o <code>CHECK</code> de coerência.</td></tr>
+    <tr><td>7.2</td><td>Registro do óbito do Frajola.</td><td>Exclusão lógica; concatenação em texto.</td></tr>
+    <tr><td>7.3</td><td>Cancelar os agendamentos futuros de animais com óbito.</td><td><code>UPDATE</code> com <code>IN</code> e subconsulta correlacionada (data do óbito de cada animal).</td></tr>
+    <tr><td>7.4</td><td>Marcar como cancelados (no-show) os horários passados sem atendimento.</td><td><code>UPDATE</code> com <code>NOT IN</code> e subconsulta.</td></tr>
+    <tr><td>7.5</td><td>Reajuste de 8% nas vacinas.</td><td>Atualização em massa; o histórico não muda (RN08).</td></tr>
+    <tr><td>7.6</td><td>Desligamento do Dr. Fábio.</td><td>Inativação em vez de exclusão (RN10).</td></tr>
+    <tr><td>7.7</td><td>Tutor trocou telefone e e-mail.</td><td>Atualização localizada pela chave candidata (CPF).</td></tr>
   </tbody>
 </table>
 
@@ -301,9 +301,9 @@
 <table class="data">
   <thead><tr><th>#</th><th>Situação</th><th>O que demonstra</th></tr></thead>
   <tbody>
-    <tr><td>9.1</td><td>Tramadol prescrito por engano no atendimento do hamster.</td><td>Remoção de item filho pela chave natural (atendimento + medicamento).</td></tr>
-    <tr><td>9.2</td><td>Citologia lançada sem ter sido feita.</td><td>Remoção em tabela associativa pela PK composta.</td></tr>
-    <tr><td>9.3</td><td>Cadastro duplicado de tutor feito no balcão.</td><td><code>DELETE</code> protegido por <code>NOT EXISTS</code>: só apaga cadastros sem animais.</td></tr>
+    <tr><td>8.1</td><td>Tramadol prescrito por engano no atendimento do hamster.</td><td>Remoção de item filho pela chave natural (atendimento + medicamento).</td></tr>
+    <tr><td>8.2</td><td>Citologia lançada sem ter sido feita.</td><td>Remoção em tabela associativa pela PK composta.</td></tr>
+    <tr><td>8.3</td><td>Cadastro duplicado de tutor feito no balcão.</td><td><code>DELETE</code> protegido por <code>NOT IN</code>: só apaga cadastros sem animais.</td></tr>
   </tbody>
 </table>
 
@@ -312,82 +312,89 @@
 <table class="data">
   <thead><tr><th>Tentativa</th><th>Barrada por</th></tr></thead>
   <tbody>
-    <tr><td>Marcar horário sobreposto para a mesma veterinária</td><td><code>ex_agendamento_conflito_vet</code></td></tr>
+    <tr><td>Marcar horário sobreposto para a mesma veterinária</td><td>gatilho <code>fn_agendamento_conflito</code></td></tr>
     <tr><td>Gerar atendimento de agendamento cancelado</td><td>gatilho <code>fn_atendimento_vincula_agendamento</code></td></tr>
-    <tr><td>Vincular atendimento a agendamento de outro animal</td><td>FK composta <code>fk_atendimento_agendamento</code></td></tr>
+    <tr><td>Vincular atendimento a agendamento de outro animal</td><td>gatilho <code>fn_atendimento_vincula_agendamento</code></td></tr>
     <tr><td>Atender animal após o óbito</td><td>gatilho <code>fn_atendimento_valida_animal</code></td></tr>
     <tr><td>Apagar tutor que tem animais</td><td>FK <code>fk_animal_tutor</code> (RESTRICT)</td></tr>
     <tr><td>Cancelar agendamento sem motivo</td><td><code>ck_agendamento_cancel</code></td></tr>
     <tr><td>Cancelar agendamento que já virou atendimento</td><td>gatilho <code>fn_agendamento_valida_status</code></td></tr>
     <tr><td>Cadastrar tutor com CPF de dígito verificador errado</td><td><code>ck_tutor_cpf</code> (função <code>cpf_valido</code>)</td></tr>
-    <tr><td>Prescrever Simparic (só cão) para uma gata</td><td>gatilho <code>fn_valida_especie</code></td></tr>
-    <tr><td>Aplicar vacina V10 (só cão) em um gato</td><td>gatilho <code>fn_valida_especie</code></td></tr>
+    <tr><td>Prescrever Simparic (só cão) para uma gata</td><td>gatilho <code>fn_prescricao_valida_especie</code></td></tr>
+    <tr><td>Aplicar vacina V10 (só cão) em um gato</td><td>gatilho <code>fn_atproc_valida_especie</code></td></tr>
   </tbody>
 </table>
 
 <!-- ============================== 6 ============================== -->
 <h2 id="s6">Consultas obrigatórias</h2>
 
-<p>Cada consulta é apresentada com o objetivo de negócio, o SQL exatamente como está em <code>03_consultas.sql</code>, a explicação da lógica e o resultado obtido sobre os dados de teste. Os resultados foram gerados automaticamente pelo script que monta este PDF, executando as consultas no banco em 27/10/2026. Parâmetros como datas ficam em uma CTE <code>params</code> no início da consulta, para facilitar a troca no pgAdmin.</p>
+<p>Cada consulta é apresentada com o objetivo de negócio, o SQL exatamente como está em <code>03_consultas.sql</code>, a explicação da lógica e o resultado obtido sobre os dados de teste. Os resultados foram gerados automaticamente pelo script que monta este PDF, executando as consultas no banco em 27/10/2026.</p>
 
 <h3 class="q">Q1. Animais com atendimentos em aberto ou agendamentos futuros</h3>
 <p class="goal"><b>Objetivo:</b> painel da recepção, com quem está em atendimento ou internado agora e quem tem horário marcado, já com o telefone do tutor para confirmação.</p>
 {{SQL:Q1}}
-<p><b>Como funciona.</b> Duas CTEs produzem conjuntos com as mesmas colunas: <code>em_aberto</code> (atendimentos com status <code>EM_ABERTO</code>) e <code>futuros</code> (agendamentos <code>AGENDADO</code> com início depois de <code>now()</code>). O <code>UNION ALL</code> junta os dois sem eliminar duplicatas, já que um animal pode estar internado e ter retorno marcado ao mesmo tempo, como o Max. A junção com <code>vw_animal</code> traz espécie, tutor e telefone. Os dois filtros correspondem aos índices parciais <code>ix_atendimento_em_aberto</code> e <code>ix_agendamento_futuro</code>.</p>
+<p><b>Como funciona.</b> A consulta parte da visão <code>vw_animal</code>, que já traz espécie, tutor e telefone. O <code>WHERE</code> combina duas subconsultas com <code>IN</code> ligadas por <code>OR</code>: animais que aparecem em atendimentos com status <code>EM_ABERTO</code> ou em agendamentos <code>AGENDADO</code> com início depois de <code>now()</code>. Assim cada animal aparece uma vez só, mesmo que esteja nas duas situações, como o Max (internado e com retorno marcado). As duas últimas colunas são <b>subconsultas escalares correlacionadas</b>: para cada animal, contam os atendimentos em aberto e buscam a data do próximo horário com <code>MIN</code>.</p>
 <div class="result-box">{{RES:Q1}}</div>
 
 <h3 class="q">Q2. Ranking de veterinários por quantidade de atendimentos em um período</h3>
 <p class="goal"><b>Objetivo:</b> medir a produtividade da equipe entre duas datas (aqui, de 01/01 a 31/10/2026).</p>
 {{SQL:Q2}}
-<p><b>Como funciona.</b> O período fica na CTE <code>params</code>. O ponto principal é o <code>LEFT JOIN</code> com o filtro de datas <b>na cláusula <code>ON</code></b>: se o filtro estivesse no <code>WHERE</code>, veterinários sem atendimentos no período sumiriam do relatório. Por isso se conta <code>count(at.id_atendimento)</code>, que ignora nulos, e não <code>count(*)</code>. O <code>FILTER</code> conta urgências e emergências na mesma passada. Na consulta externa, <code>RANK()</code> numera as posições e repete a posição em empates (dois veterinários em 3º lugar, e o seguinte vai para 5º), e <code>SUM() OVER ()</code> calcula o total geral para o percentual sem uma segunda consulta. O limite superior usa <code>&lt; data_fim + 1</code> para incluir o último dia inteiro, já que a coluna tem hora.</p>
+<p><b>Como funciona.</b> O ponto principal é o <code>LEFT JOIN</code> com o filtro de datas <b>na cláusula <code>ON</code></b>: se o filtro estivesse no <code>WHERE</code>, veterinários sem atendimentos no período sumiriam do relatório. Por isso se conta <code>COUNT(at.id_atendimento)</code>, que ignora nulos, e não <code>COUNT(*)</code>. O <code>ORDER BY</code> pela contagem, em ordem decrescente, monta o ranking. As urgências e emergências de cada veterinário vêm de uma subconsulta correlacionada, e o percentual divide a contagem pelo total do período, obtido por outra subconsulta. O limite superior usa <code>&lt; '2026-11-01'</code> para incluir o dia 31/10 inteiro, já que a coluna tem hora.</p>
 <div class="result-box">{{RES:Q2}}</div>
 
 <h3 class="q">Q3. Tutores com mais de um animal e histórico resumido de procedimentos</h3>
 <p class="goal"><b>Objetivo:</b> identificar os clientes com mais vínculo (candidatos a plano família) e ver o que já fizeram na clínica.</p>
 {{SQL:Q3}}
-<p><b>Como funciona.</b> A CTE <code>tutores_multi</code> seleciona os tutores com <code>HAVING count(*) &gt; 1</code>. As outras três CTEs agregam, cada uma em seu próprio nível, os animais do tutor (<code>string_agg</code> ordenado), os atendimentos (com <code>LEFT JOIN</code>, para que um animal nunca atendido não suma) e os procedimentos com quantidade e valor. Agregar em CTEs separadas antes de juntar evita o problema da <b>multiplicação de linhas</b>: se tudo fosse juntado de uma vez, cada atendimento seria repetido para cada procedimento e as contagens sairiam infladas. A consulta final monta o resumo “Procedimento ×quantidade”, do mais frequente para o menos frequente.</p>
+<p><b>Como funciona.</b> A subconsulta do <code>WHERE</code> agrupa os animais por tutor e, com <code>HAVING COUNT(*) &gt; 1</code>, devolve só os tutores com mais de um animal. Para eles, a consulta junta tutor → animal → atendimento → procedimentos e agrupa por tutor e procedimento: assim cada linha é um procedimento feito nos animais daquele tutor, com quantas vezes foi feito (<code>SUM(quantidade)</code>), quanto custou e quando foi a última vez (<code>MAX</code> da data). A quantidade de animais vem de uma subconsulta correlacionada, para não ser afetada pela junção com os procedimentos.</p>
 <div class="result-box">{{RES:Q3}}</div>
 
 <h3 class="q">Q4. Medicamentos mais prescritos por espécie de animal</h3>
 <p class="goal"><b>Objetivo:</b> apoiar o planejamento de estoque da farmácia e mostrar o perfil terapêutico de cada espécie.</p>
 {{SQL:Q4}}
-<p><b>Como funciona.</b> A espécie não está na prescrição: ela é alcançada pela cadeia prescrição → atendimento → animal → raça → espécie (seis tabelas). A CTE <code>contagem</code> agrupa por espécie e medicamento e conta prescrições e animais distintos. Animais distintos é relevante porque um animal crônico pode receber o mesmo remédio várias vezes, como o Zeus com o Vetmedin. Em seguida, <code>DENSE_RANK() OVER (PARTITION BY especie ...)</code> reinicia a numeração a cada espécie. Foi usado <code>DENSE_RANK</code> em vez de <code>ROW_NUMBER</code> para que medicamentos empatados não sejam descartados arbitrariamente, e o filtro <code>posicao &lt;= 3</code> traz o “top 3” de cada espécie.</p>
+<p><b>Como funciona.</b> A espécie não está na prescrição: ela é alcançada pela cadeia prescrição → atendimento → animal → raça → espécie (seis tabelas). O <code>GROUP BY</code> por espécie e medicamento conta prescrições e animais distintos (<code>COUNT(DISTINCT)</code>). Animais distintos é relevante porque um animal crônico pode receber o mesmo remédio várias vezes, como o Zeus com o Vetmedin. O <code>ORDER BY</code> por espécie e depois pela contagem decrescente deixa o medicamento mais prescrito de cada espécie no topo do seu grupo.</p>
 <div class="result-box">{{RES:Q4}}</div>
 
 <h3 class="q">Q5. Junção de 3+ tabelas, agregação e subconsulta</h3>
 <p class="goal"><b>Objetivo:</b> “quais pacientes gastaram acima da média?”, para acompanhar casos de alto custo (doenças crônicas, cirurgias) e oferecer planos de saúde pet.</p>
 {{SQL:Q5}}
-<p><b>Como funciona.</b> A consulta junta <b>seis tabelas</b> (animal, raça, espécie, tutor, atendimento, atendimento_procedimento) e agrega o gasto por animal com <code>SUM(quantidade × valor_unitario)</code>, usando o valor cobrado e não o preço de tabela. A <b>subconsulta</b>, em uma tabela derivada aninhada, primeiro calcula o gasto de cada paciente e depois a média desses gastos. A média por paciente é diferente da média por item, que seria distorcida por atendimentos com muitos itens. Como a subconsulta devolve uma única linha, o <code>CROSS JOIN</code> a disponibiliza tanto no <code>HAVING</code>, que filtra quem está acima, quanto no <code>SELECT</code>, que mostra quanto acima está, em %. Atende aos três requisitos: junção de três ou mais tabelas, agregação e subconsulta.</p>
+<p><b>Como funciona.</b> A consulta junta <b>seis tabelas</b> (animal, raça, espécie, tutor, atendimento, atendimento_procedimento) e agrega o gasto por animal com <code>SUM(quantidade × valor_unitario)</code>, usando o valor cobrado e não o preço de tabela. A <b>subconsulta</b> no <code>HAVING</code> usa uma tabela derivada (<code>gastos</code>): primeiro calcula o gasto de cada paciente e depois a média desses gastos com <code>AVG</code>. A média por paciente é diferente da média por item, que seria distorcida por atendimentos com muitos itens. O <code>HAVING</code> mantém só quem gastou mais que essa média (R$ 666,00 nos dados de teste). Atende aos três requisitos: junção de três ou mais tabelas, agregação e subconsulta.</p>
 <div class="result-box">{{RES:Q5}}</div>
 
 <!-- ============================== 7 ============================== -->
 <h2 id="s7">Consultas complementares</h2>
-<p>Cinco consultas extras, também em <code>03_consultas.sql</code>, cobrem necessidades comuns da clínica e exercitam outros recursos do SQL.</p>
+<p>Sete consultas extras, também em <code>03_consultas.sql</code>, cobrem necessidades comuns da clínica.</p>
 
 <h3 class="q">C1. Prontuário de um animal</h3>
-<p>Usa a visão <code>vw_historico_clinico</code>, que consolida procedimentos e prescrições de cada atendimento com <code>LEFT JOIN LATERAL</code> e <code>string_agg</code>. Os atendimentos sem itens continuam aparecendo. A consulta só filtra pelo animal informado em <code>params</code>.</p>
+<p>Usa a visão <code>vw_historico_clinico</code>: uma linha por atendimento, com veterinário, queixa, diagnóstico, peso e, por subconsultas correlacionadas, o valor total e a quantidade de procedimentos e prescrições. A consulta só filtra pelo nome do animal.</p>
 {{SQL:C1}}
 <div class="result-box">{{RES:C1}}</div>
 
-<h3 class="q">C2. Faturamento mensal por categoria</h3>
-<p>Transforma linhas em colunas (<i>pivot</i>) com <code>SUM(...) FILTER (WHERE ...)</code>, uma coluna por categoria, agrupando por <code>date_trunc('month', ...)</code>. O pico de outubro corresponde à gastropexia de emergência do Max.</p>
+<h3 class="q">C2. Receitas de um animal</h3>
+<p>Complementa o prontuário: lista cada medicamento prescrito, com dose, frequência e duração, juntando prescrição, atendimento, animal e medicamento.</p>
 {{SQL:C2}}
 <div class="result-box">{{RES:C2}}</div>
 
-<h3 class="q">C3. Cães e gatos sem vacina nos últimos 12 meses</h3>
-<p>Lista de contatos para campanha de vacinação. O anti-join <code>NOT EXISTS</code> encontra quem <i>não</i> tem vacina recente, uma subconsulta escalar correlacionada mostra a data da última vacina (vazia quando nunca vacinou) e o filtro <code>vivo</code> exclui o paciente que veio a óbito.</p>
+<h3 class="q">C3. Faturamento mensal por categoria</h3>
+<p>Agrupa por mês (<code>date_trunc('month', ...)</code>) e por categoria de procedimento e soma o valor cobrado. O pico de outubro corresponde à gastropexia de emergência do Max.</p>
 {{SQL:C3}}
 <div class="result-box">{{RES:C3}}</div>
 
-<h3 class="q">C4. Taxa de cancelamento por veterinário</h3>
-<p>Distribuição dos agendamentos por status em uma única passada sobre a tabela, usando agregações condicionais com <code>FILTER</code>.</p>
+<h3 class="q">C4. Cães e gatos sem vacina nos últimos 12 meses</h3>
+<p>Lista de contatos para campanha de vacinação. O <code>NOT IN</code> com subconsulta encontra quem <i>não</i> tem vacina recente; uma subconsulta escalar correlacionada mostra a data da última vacina (vazia quando nunca vacinou), e o filtro <code>vivo</code> exclui o paciente que veio a óbito.</p>
 {{SQL:C4}}
 <div class="result-box">{{RES:C4}}</div>
 
-<h3 class="q">C5. Itens restritos por espécie</h3>
-<p>Mostra, para cada espécie, os procedimentos e medicamentos que têm restrição e a incluem. Usa dois <code>LEFT JOIN</code> independentes e <code>string_agg(DISTINCT ...)</code> para não repetir itens, já que as duas junções se multiplicam.</p>
+<h3 class="q">C5. Agendamentos por veterinário e situação</h3>
+<p>Quantos horários de cada veterinário foram realizados, cancelados ou ainda estão agendados.</p>
 {{SQL:C5}}
 <div class="result-box">{{RES:C5}}</div>
+
+<h3 class="q">C6 e C7. Itens restritos por espécie</h3>
+<p>Mostram as regras da RN12: quais procedimentos e quais medicamentos estão restritos a cada espécie. O que não aparece vale para todas.</p>
+{{SQL:C6}}
+<div class="result-box">{{RES:C6}}</div>
+{{SQL:C7}}
+<div class="result-box">{{RES:C7}}</div>
 
 <h2 id="s7b">Interface web</h2>
 <p>Para demonstrar o banco em uso, foi feita uma interface web em <b>Node.js</b> (Express e o driver <code>pg</code>), com front-end em HTML, CSS e JavaScript sem framework. Ela fica na pasta <code>app/</code> e roda com <code>npm install</code> e <code>npm start</code>. As telas usam as mesmas visões e consultas deste relatório.</p>
@@ -398,7 +405,7 @@
 
 <!-- ============================== 8 ============================== -->
 <h2 id="s8">Considerações finais</h2>
-<p>O banco implementado cobre todas as entidades e regras pedidas e leva para dentro do SGBD as regras que, em muitos sistemas, ficam só na aplicação: conflito de agenda, vínculo coerente entre agendamento e atendimento, preço histórico e bloqueio pós-óbito. Assim, qualquer cliente que acesse o banco, seja o pgAdmin, uma API ou um script, encontra as mesmas garantias. O esquema está em 3FN (e FNBC), com uma única redundância, documentada e mantida por gatilho.</p>
+<p>O banco implementado cobre todas as entidades e regras pedidas e leva para dentro do SGBD as regras que, em muitos sistemas, ficam só na aplicação: conflito de agenda, vínculo coerente entre agendamento e atendimento, preço histórico, bloqueio pós-óbito, validação de CPF e restrição por espécie. Assim, qualquer cliente que acesse o banco, seja o pgAdmin, uma API ou um script, encontra as mesmas garantias. O esquema está em 3FN (e FNBC), com uma única redundância, documentada e mantida por gatilho.</p>
 <p>Como evoluções naturais, ficam: controle de estoque de medicamentos (com baixa automática a partir das prescrições), um módulo financeiro de pagamentos, uma carteira de vacinação com datas de reforço e perfis de acesso (papéis <code>recepcao</code>, <code>veterinario</code>, <code>gestor</code>) com <code>GRANT</code> por esquema e segurança em nível de linha.</p>
 
 <!-- ============================== APÊNDICE ============================== -->
@@ -416,7 +423,7 @@ psql -U postgres -d clinica_vet -f sql/01_ddl.sql
 psql -U postgres -d clinica_vet -f sql/02_dml.sql
 psql -U postgres -d clinica_vet -f sql/03_consultas.sql</pre>
 <p>Ou, com Docker, <code>docker compose up</code> sobe um PostgreSQL 16 já com o esquema e os dados carregados (ver <code>README.md</code>).</p>
-<p class="note">As consultas Q1 e C3 usam <code>now()</code>. Os dados foram construídos com 27/10/2026 como “hoje”; se forem executadas muito depois dessa data, os agendamentos futuros deixarão de ser futuros. Basta trocar <code>now()</code> por uma data fixa na CTE <code>params</code>.</p>
+<p class="note">As consultas Q1 e C4 usam <code>now()</code>. Os dados foram construídos com 27/10/2026 como “hoje”; se forem executadas muito depois dessa data, os agendamentos futuros deixarão de ser futuros. Basta trocar <code>now()</code> por uma data fixa, como <code>'2026-10-27'</code>.</p>
 
 </body>
 </html>

@@ -15,8 +15,8 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v) => (v === null ? null : Numbe
 
 export const pool = new pg.Pool({
   database: process.env.PGDATABASE || 'clinica_vet',
-  // todas as tabelas ficam no esquema "clinica"; o fuso garante datas no horário local
-  options: '-c search_path=clinica,public -c timezone=America/Sao_Paulo',
+  // todas as tabelas ficam no esquema "clinica"
+  options: '-c search_path=clinica',
 });
 
 export const query = (text, params) => pool.query(text, params);
@@ -34,7 +34,6 @@ const MENSAGENS = {
   ck_tutor_uf: 'UF deve ter 2 letras maiúsculas.',
   uq_animal_microchip: 'Já existe um animal com esse microchip.',
   ck_animal_microchip: 'Microchip deve ter 15 dígitos.',
-  ex_agendamento_conflito_vet: 'Esse veterinário já tem um horário marcado que se sobrepõe a este.',
   ck_agendamento_periodo: 'O fim do horário precisa ser depois do início.',
   ck_agendamento_cancel: 'Informe o motivo do cancelamento.',
 };
@@ -42,6 +41,9 @@ const MENSAGENS = {
 export function mensagemDeErro(err) {
   if (err.constraint && MENSAGENS[err.constraint]) return MENSAGENS[err.constraint];
   // erros levantados pelos gatilhos já vêm em português (RAISE EXCEPTION)
+  if (err.message.includes('já tem um horário marcado')) {
+    return 'Esse veterinário já tem um horário marcado que se sobrepõe a este.';
+  }
   if (err.code === '23514' || err.code === 'P0001') return err.message;
   if (err.code === '23503') return 'Registro relacionado não encontrado ou em uso.';
   if (err.code === '23505') return 'Já existe um registro com esses dados.';

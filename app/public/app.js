@@ -35,6 +35,14 @@ const fmt = {
   cpf: (c) => (c ? `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}` : ''),
   tipo: (t) => ({ CONSULTA: 'Consulta', RETORNO: 'Retorno', VACINACAO: 'Vacinação', EXAME: 'Exame', CIRURGIA: 'Cirurgia' }[t] ?? t),
   status: (s) => ({ AGENDADO: 'Agendado', REALIZADO: 'Realizado', CANCELADO: 'Cancelado', EM_ABERTO: 'Em atendimento', FINALIZADO: 'Finalizado' }[s] ?? s),
+  // "Vetmedin 1,25 mg — 1,5 comprimidos a cada 12 h por 30 dias"
+  receita: (p) => {
+    const contaveis = ['comprimido', 'capsula', 'gota', 'aplicacao', 'pipeta'];
+    const unidade = p.dose_unidade + (p.dose_quantidade > 1 && contaveis.includes(p.dose_unidade) ? 's' : '');
+    const dose = p.dose_quantidade.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+    const duracao = p.duracao_dias ? ` por ${p.duracao_dias} ${p.duracao_dias === 1 ? 'dia' : 'dias'}` : '';
+    return `${p.nome_comercial} ${p.concentracao} — ${dose} ${unidade} a cada ${p.frequencia_horas} h${duracao}`;
+  },
   carater: (c) => ({ ELETIVO: 'Eletivo', URGENCIA: 'Urgência', EMERGENCIA: 'Emergência' }[c] ?? c),
 };
 
@@ -273,8 +281,8 @@ telas.prontuario = async (params, id) => {
                 ${h.diagnostico ? `<p>${esc(h.diagnostico)}</p>` : ''}
                 <p class="meta">${esc(h.veterinario)} · ${fmt.carater(h.carater)}${h.peso_kg != null ? ` · ${fmt.peso(h.peso_kg)}` : ''}${h.temperatura_c != null ? ` · ${String(h.temperatura_c).replace('.', ',')} °C` : ''}${h.valor_total ? ` · ${fmt.dinheiro(h.valor_total)}` : ''}</p>
                 <ul class="itens">
-                  ${(h.procedimentos ?? '').split('; ').filter(Boolean).map((p) => `<li class="proc">${esc(p)}</li>`).join('')}
-                  ${(h.prescricoes ?? '').split('; ').filter(Boolean).map((p) => `<li class="med">${esc(p)}</li>`).join('')}
+                  ${h.procedimentos.map((p) => `<li class="proc">${esc(p)}</li>`).join('')}
+                  ${h.prescricoes.map((p) => `<li class="med">${esc(fmt.receita(p))}</li>`).join('')}
                 </ul>
               </div>
             </li>`).join('')}
@@ -342,7 +350,7 @@ telas.tutores = async (params) => {
 telas.relatorios = async (params) => {
   const de = params.get('de') || '2026-01-01';
   const ate = params.get('ate') || '2026-12-31';
-  const { ranking, medicamentos, altoCusto } = await api(`relatorios?de=${de}&ate=${ate}`);
+  const { ranking, medicamentos, altoCusto, media } = await api(`relatorios?de=${de}&ate=${ate}`);
   const maior = Math.max(1, ...ranking.map((r) => r.atendimentos));
 
   const porEspecie = {};
@@ -378,7 +386,7 @@ telas.relatorios = async (params) => {
 
       <section>
         <h2 style="margin-bottom:.8rem">Pacientes acima do gasto médio</h2>
-        <p style="color:var(--tinta-suave);margin-top:0">Média por paciente: ${fmt.dinheiro(altoCusto[0]?.media)}</p>
+        <p style="color:var(--tinta-suave);margin-top:0">Média por paciente: ${fmt.dinheiro(media)}</p>
         <div class="tabela-wrap">
           <table>
             <thead><tr><th>Paciente</th><th class="num">Gasto</th></tr></thead>
@@ -581,6 +589,9 @@ document.addEventListener('submit', (ev) => {
 
 // ------------------------------------------------------------ roteador
 async function renderizar() {
+  // ao trocar de tela, fecha formulário que tenha ficado aberto
+  const janela = document.getElementById('janela');
+  if (janela.open) janela.close();
   const [caminho, busca] = location.hash.slice(2).split('?');
   const [secao, id] = (caminho || 'painel').split('/');
   const params = new URLSearchParams(busca);

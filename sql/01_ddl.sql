@@ -2,80 +2,87 @@
 --  Sistema de Gestão de Clínica Veterinária
 --  01_ddl.sql — esquema físico (tabelas, restrições, índices, gatilhos, visões)
 -- -----------------------------------------------------------------------------
---  SGBD.......: PostgreSQL 13+ (testado no 16)
+--  SGBD.......: PostgreSQL (testado nas versões 16 e 18)
 --  Banco......: clinica_vet   (criado por 00_criar_banco.sql)
 --  Esquema....: clinica
 --
---  O script é idempotente: remove o esquema "clinica" (se existir) e recria
---  tudo do zero. Pode ser executado várias vezes durante o desenvolvimento.
+--  O script apaga o esquema "clinica" (se existir) e recria tudo do zero,
+--  então pode ser executado várias vezes durante o desenvolvimento.
 -- =============================================================================
 
-BEGIN;
-
--- -----------------------------------------------------------------------------
--- 0. Esquema e extensões
--- -----------------------------------------------------------------------------
 DROP SCHEMA IF EXISTS clinica CASCADE;
 CREATE SCHEMA clinica;
 COMMENT ON SCHEMA clinica IS 'Objetos do sistema de gestão de clínica veterinária.';
 
-SET search_path TO clinica, public;
+SET search_path TO clinica;
 
--- btree_gist permite combinar igualdade (=) e sobreposição de intervalos (&&)
--- na mesma restrição de exclusão (agenda sem conflito por veterinário).
--- É uma extensão "trusted": o dono do banco pode instalá-la sem superusuário.
-CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
 
 -- -----------------------------------------------------------------------------
 -- Validação de CPF (dígitos verificadores, módulo 11)
---  Criada antes das tabelas porque é usada nos CHECK de tutor e veterinário.
---  IMMUTABLE: o resultado depende só da entrada, requisito para uso em CHECK.
+--  Criada antes das tabelas porque é usada no CHECK de tutor e veterinário.
+--
+--  Os 2 últimos dígitos do CPF são calculados a partir dos anteriores:
+--   1º dígito: multiplica os 9 primeiros pelos pesos 10, 9, ..., 2, soma,
+--              faz (soma * 10) % 11 e, se der 10, usa 0.
+--   2º dígito: mesma conta com os 10 primeiros e pesos 11, 10, ..., 2.
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION cpf_valido(p_cpf TEXT)
-RETURNS BOOLEAN
-LANGUAGE plpgsql
-IMMUTABLE STRICT AS
+CREATE OR REPLACE FUNCTION cpf_valido(p_cpf VARCHAR)
+RETURNS BOOLEAN AS
 $$
 DECLARE
-    d     INT[];
-    soma  INT;
-    dv    INT;
+    v_soma INTEGER;
+    v_dv1  INTEGER;
+    v_dv2  INTEGER;
 BEGIN
-    -- formato: exatamente 11 dígitos
-    IF p_cpf !~ '^[0-9]{11}$' THEN
+    -- precisa ter 11 caracteres e todos devem ser dígitos
+    -- (TRANSLATE apaga os dígitos; se sobrar algo, havia outro caractere)
+    IF LENGTH(p_cpf) <> 11 OR TRANSLATE(p_cpf, '0123456789', '') <> '' THEN
         RETURN FALSE;
     END IF;
 
-    -- sequências repetidas (000..., 111...) passam na conta, mas são inválidas
-    IF p_cpf ~ '^(.)\1{10}$' THEN
+    -- sequências repetidas (000..., 111...) passam na conta, mas não existem
+    IF p_cpf = REPEAT(SUBSTR(p_cpf, 1, 1), 11) THEN
         RETURN FALSE;
     END IF;
 
-    d := string_to_array(p_cpf, NULL)::INT[];   -- '123...' -> {1,2,3,...}
-
-    -- 1º dígito verificador: pesos 10..2 sobre os 9 primeiros dígitos
-    soma := 0;
-    FOR i IN 1..9 LOOP
-        soma := soma + d[i] * (11 - i);
-    END LOOP;
-    dv := (soma * 10) % 11;
-    IF dv = 10 THEN dv := 0; END IF;
-    IF dv <> d[10] THEN
-        RETURN FALSE;
+    -- 1º dígito verificador
+    v_soma := CAST(SUBSTR(p_cpf, 1, 1) AS INTEGER) * 10
+            + CAST(SUBSTR(p_cpf, 2, 1) AS INTEGER) * 9
+            + CAST(SUBSTR(p_cpf, 3, 1) AS INTEGER) * 8
+            + CAST(SUBSTR(p_cpf, 4, 1) AS INTEGER) * 7
+            + CAST(SUBSTR(p_cpf, 5, 1) AS INTEGER) * 6
+            + CAST(SUBSTR(p_cpf, 6, 1) AS INTEGER) * 5
+            + CAST(SUBSTR(p_cpf, 7, 1) AS INTEGER) * 4
+            + CAST(SUBSTR(p_cpf, 8, 1) AS INTEGER) * 3
+            + CAST(SUBSTR(p_cpf, 9, 1) AS INTEGER) * 2;
+    v_dv1 := (v_soma * 10) % 11;
+    IF v_dv1 = 10 THEN
+        v_dv1 := 0;
     END IF;
 
-    -- 2º dígito verificador: pesos 11..2 sobre os 10 primeiros dígitos
-    soma := 0;
-    FOR i IN 1..10 LOOP
-        soma := soma + d[i] * (12 - i);
-    END LOOP;
-    dv := (soma * 10) % 11;
-    IF dv = 10 THEN dv := 0; END IF;
+    -- 2º dígito verificador
+    v_soma := CAST(SUBSTR(p_cpf, 1, 1) AS INTEGER) * 11
+            + CAST(SUBSTR(p_cpf, 2, 1) AS INTEGER) * 10
+            + CAST(SUBSTR(p_cpf, 3, 1) AS INTEGER) * 9
+            + CAST(SUBSTR(p_cpf, 4, 1) AS INTEGER) * 8
+            + CAST(SUBSTR(p_cpf, 5, 1) AS INTEGER) * 7
+            + CAST(SUBSTR(p_cpf, 6, 1) AS INTEGER) * 6
+            + CAST(SUBSTR(p_cpf, 7, 1) AS INTEGER) * 5
+            + CAST(SUBSTR(p_cpf, 8, 1) AS INTEGER) * 4
+            + CAST(SUBSTR(p_cpf, 9, 1) AS INTEGER) * 3
+            + v_dv1 * 2;
+    v_dv2 := (v_soma * 10) % 11;
+    IF v_dv2 = 10 THEN
+        v_dv2 := 0;
+    END IF;
 
-    RETURN dv = d[11];
-END;
-$$;
-COMMENT ON FUNCTION cpf_valido(TEXT) IS
+    RETURN v_dv1 = CAST(SUBSTR(p_cpf, 10, 1) AS INTEGER)
+       AND v_dv2 = CAST(SUBSTR(p_cpf, 11, 1) AS INTEGER);
+END
+$$
+LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION cpf_valido(VARCHAR) IS
     'TRUE se o CPF (11 dígitos, sem máscara) tem dígitos verificadores válidos e não é uma sequência repetida.';
 
 
@@ -85,8 +92,8 @@ COMMENT ON FUNCTION cpf_valido(TEXT) IS
 
 -- 1.1 Espécie --------------------------------------------------------------
 CREATE TABLE especie (
-    id_especie  SMALLINT    GENERATED BY DEFAULT AS IDENTITY,
-    nome        VARCHAR(40) NOT NULL,
+    id_especie  SERIAL,
+    nome        VARCHAR(40) CONSTRAINT nn_especie_nome NOT NULL,
 
     CONSTRAINT pk_especie      PRIMARY KEY (id_especie),
     CONSTRAINT uq_especie_nome UNIQUE (nome)
@@ -96,24 +103,24 @@ COMMENT ON COLUMN especie.nome IS 'Nome popular da espécie, único.';
 
 -- 1.2 Raça -----------------------------------------------------------------
 CREATE TABLE raca (
-    id_raca     INTEGER     GENERATED BY DEFAULT AS IDENTITY,
-    id_especie  SMALLINT    NOT NULL,
-    nome        VARCHAR(60) NOT NULL,
+    id_raca     SERIAL,
+    id_especie  INTEGER     CONSTRAINT nn_raca_especie NOT NULL,
+    nome        VARCHAR(60) CONSTRAINT nn_raca_nome    NOT NULL,
     porte       CHAR(1),
 
-    CONSTRAINT pk_raca          PRIMARY KEY (id_raca),
-    CONSTRAINT fk_raca_especie  FOREIGN KEY (id_especie)
-        REFERENCES especie (id_especie) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT pk_raca              PRIMARY KEY (id_raca),
+    CONSTRAINT fk_raca_especie      FOREIGN KEY (id_especie)
+        REFERENCES especie (id_especie) ON DELETE RESTRICT,
     CONSTRAINT uq_raca_especie_nome UNIQUE (id_especie, nome),
-    CONSTRAINT ck_raca_porte    CHECK (porte IN ('P', 'M', 'G'))
+    CONSTRAINT ck_raca_porte        CHECK (porte IN ('P', 'M', 'G'))
 );
 COMMENT ON TABLE  raca       IS 'Raças por espécie. Animais sem raça definida usam a raça "SRD" da espécie.';
 COMMENT ON COLUMN raca.porte IS 'Porte típico: P (pequeno), M (médio), G (grande). Nulo quando não se aplica.';
 
 -- 1.3 Especialidade --------------------------------------------------------
 CREATE TABLE especialidade (
-    id_especialidade SMALLINT    GENERATED BY DEFAULT AS IDENTITY,
-    nome             VARCHAR(60) NOT NULL,
+    id_especialidade SERIAL,
+    nome             VARCHAR(60) CONSTRAINT nn_especialidade_nome NOT NULL,
 
     CONSTRAINT pk_especialidade      PRIMARY KEY (id_especialidade),
     CONSTRAINT uq_especialidade_nome UNIQUE (nome)
@@ -122,11 +129,11 @@ COMMENT ON TABLE especialidade IS 'Áreas de atuação dos médicos-veterinário
 
 -- 1.4 Procedimento (catálogo) ----------------------------------------------
 CREATE TABLE procedimento (
-    id_procedimento INTEGER       GENERATED BY DEFAULT AS IDENTITY,
-    nome            VARCHAR(100)  NOT NULL,
-    categoria       VARCHAR(15)   NOT NULL,
+    id_procedimento SERIAL,
+    nome            VARCHAR(100)  CONSTRAINT nn_procedimento_nome  NOT NULL,
+    categoria       VARCHAR(15)   CONSTRAINT nn_procedimento_cat   NOT NULL,
     descricao       TEXT,
-    preco_base      NUMERIC(10,2) NOT NULL,
+    preco_base      NUMERIC(10,2) CONSTRAINT nn_procedimento_preco NOT NULL,
     ativo           BOOLEAN       NOT NULL DEFAULT TRUE,
 
     CONSTRAINT pk_procedimento       PRIMARY KEY (id_procedimento),
@@ -141,11 +148,11 @@ COMMENT ON COLUMN procedimento.ativo      IS 'FALSE para procedimentos descontin
 
 -- 1.5 Medicamento (catálogo) -----------------------------------------------
 CREATE TABLE medicamento (
-    id_medicamento     INTEGER     GENERATED BY DEFAULT AS IDENTITY,
-    nome_comercial     VARCHAR(80) NOT NULL,
-    principio_ativo    VARCHAR(80) NOT NULL,
-    concentracao       VARCHAR(30) NOT NULL,
-    forma_farmaceutica VARCHAR(15) NOT NULL,
+    id_medicamento     SERIAL,
+    nome_comercial     VARCHAR(80) CONSTRAINT nn_medicamento_nome      NOT NULL,
+    principio_ativo    VARCHAR(80) CONSTRAINT nn_medicamento_principio NOT NULL,
+    concentracao       VARCHAR(30) CONSTRAINT nn_medicamento_conc      NOT NULL,
+    forma_farmaceutica VARCHAR(15) CONSTRAINT nn_medicamento_forma     NOT NULL,
     fabricante         VARCHAR(60),
     controlado         BOOLEAN     NOT NULL DEFAULT FALSE,
 
@@ -161,18 +168,18 @@ COMMENT ON COLUMN medicamento.concentracao IS 'Ex.: "50 mg", "10 mg/mL".';
 COMMENT ON COLUMN medicamento.controlado   IS 'TRUE para substâncias sujeitas a controle especial (receita retida).';
 
 -- 1.6 Espécies indicadas para cada procedimento (N:N) ----------------------
---  Regra: procedimento SEM linhas aqui vale para qualquer espécie (ex.: consulta,
+--  Procedimento SEM linhas aqui vale para qualquer espécie (ex.: consulta,
 --  hemograma). Procedimento COM linhas só pode ser feito nas espécies listadas
 --  (ex.: vacina V10 só em cão). Garantido pelo gatilho trg_atproc_valida_especie.
 CREATE TABLE procedimento_especie (
-    id_procedimento INTEGER  NOT NULL,
-    id_especie      SMALLINT NOT NULL,
+    id_procedimento INTEGER,
+    id_especie      INTEGER,
 
     CONSTRAINT pk_procedimento_especie PRIMARY KEY (id_procedimento, id_especie),
     CONSTRAINT fk_procesp_procedimento FOREIGN KEY (id_procedimento)
-        REFERENCES procedimento (id_procedimento) ON UPDATE CASCADE ON DELETE CASCADE,
+        REFERENCES procedimento (id_procedimento) ON DELETE CASCADE,
     CONSTRAINT fk_procesp_especie      FOREIGN KEY (id_especie)
-        REFERENCES especie (id_especie)           ON UPDATE CASCADE ON DELETE RESTRICT
+        REFERENCES especie (id_especie)           ON DELETE RESTRICT
 );
 COMMENT ON TABLE procedimento_especie IS
     'Restringe um procedimento às espécies listadas. Sem linhas = permitido para todas as espécies.';
@@ -181,14 +188,14 @@ COMMENT ON TABLE procedimento_especie IS
 --  Mesma regra: medicamento sem linhas aqui é de uso geral; com linhas, só pode
 --  ser prescrito para as espécies listadas (ex.: Simparic só para cão).
 CREATE TABLE medicamento_especie (
-    id_medicamento INTEGER  NOT NULL,
-    id_especie     SMALLINT NOT NULL,
+    id_medicamento INTEGER,
+    id_especie     INTEGER,
 
     CONSTRAINT pk_medicamento_especie PRIMARY KEY (id_medicamento, id_especie),
     CONSTRAINT fk_medesp_medicamento  FOREIGN KEY (id_medicamento)
-        REFERENCES medicamento (id_medicamento) ON UPDATE CASCADE ON DELETE CASCADE,
+        REFERENCES medicamento (id_medicamento) ON DELETE CASCADE,
     CONSTRAINT fk_medesp_especie      FOREIGN KEY (id_especie)
-        REFERENCES especie (id_especie)         ON UPDATE CASCADE ON DELETE RESTRICT
+        REFERENCES especie (id_especie)         ON DELETE RESTRICT
 );
 COMMENT ON TABLE medicamento_especie IS
     'Restringe um medicamento às espécies listadas. Sem linhas = permitido para todas as espécies.';
@@ -200,29 +207,29 @@ COMMENT ON TABLE medicamento_especie IS
 
 -- 2.1 Tutor ----------------------------------------------------------------
 CREATE TABLE tutor (
-    id_tutor        INTEGER      GENERATED BY DEFAULT AS IDENTITY,
-    nome            VARCHAR(120) NOT NULL,
-    cpf             CHAR(11)     NOT NULL,
+    id_tutor        SERIAL,
+    nome            VARCHAR(120) CONSTRAINT nn_tutor_nome     NOT NULL,
+    cpf             CHAR(11)     CONSTRAINT nn_tutor_cpf      NOT NULL,
     data_nascimento DATE,
     email           VARCHAR(120),
-    telefone        VARCHAR(11)  NOT NULL,
+    telefone        VARCHAR(11)  CONSTRAINT nn_tutor_telefone NOT NULL,
     logradouro      VARCHAR(120),
     numero          VARCHAR(10),
     complemento     VARCHAR(60),
     bairro          VARCHAR(60),
-    cidade          VARCHAR(60)  NOT NULL,
-    uf              CHAR(2)      NOT NULL,
+    cidade          VARCHAR(60)  CONSTRAINT nn_tutor_cidade   NOT NULL,
+    uf              CHAR(2)      CONSTRAINT nn_tutor_uf       NOT NULL,
     cep             CHAR(8),
-    criado_em       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    criado_em       TIMESTAMP    NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_tutor          PRIMARY KEY (id_tutor),
     CONSTRAINT uq_tutor_cpf      UNIQUE (cpf),
     CONSTRAINT uq_tutor_email    UNIQUE (email),
     CONSTRAINT ck_tutor_cpf      CHECK (cpf_valido(cpf)),
-    CONSTRAINT ck_tutor_telefone CHECK (telefone ~ '^[0-9]{10,11}$'),
-    CONSTRAINT ck_tutor_email    CHECK (email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
-    CONSTRAINT ck_tutor_uf       CHECK (uf ~ '^[A-Z]{2}$'),
-    CONSTRAINT ck_tutor_cep      CHECK (cep ~ '^[0-9]{8}$')
+    CONSTRAINT ck_tutor_telefone CHECK (LENGTH(telefone) BETWEEN 10 AND 11),
+    CONSTRAINT ck_tutor_email    CHECK (email LIKE '%_@_%._%'),
+    CONSTRAINT ck_tutor_uf       CHECK (uf = UPPER(uf)),
+    CONSTRAINT ck_tutor_cep      CHECK (LENGTH(cep) = 8)
 );
 COMMENT ON TABLE  tutor          IS 'Responsável legal e financeiro pelos animais.';
 COMMENT ON COLUMN tutor.cpf      IS 'CPF somente com dígitos (11), validado por cpf_valido(). Chave candidata.';
@@ -231,27 +238,27 @@ COMMENT ON COLUMN tutor.cep      IS 'CEP somente com dígitos (8).';
 
 -- 2.2 Animal ---------------------------------------------------------------
 CREATE TABLE animal (
-    id_animal       INTEGER     GENERATED BY DEFAULT AS IDENTITY,
-    id_tutor        INTEGER     NOT NULL,
-    id_raca         INTEGER     NOT NULL,
-    nome            VARCHAR(60) NOT NULL,
-    sexo            CHAR(1)     NOT NULL,
+    id_animal       SERIAL,
+    id_tutor        INTEGER     CONSTRAINT nn_animal_tutor NOT NULL,
+    id_raca         INTEGER     CONSTRAINT nn_animal_raca  NOT NULL,
+    nome            VARCHAR(60) CONSTRAINT nn_animal_nome  NOT NULL,
+    sexo            CHAR(1)     CONSTRAINT nn_animal_sexo  NOT NULL,
     data_nascimento DATE,
     pelagem         VARCHAR(40),
     castrado        BOOLEAN     NOT NULL DEFAULT FALSE,
     microchip       CHAR(15),
     data_obito      DATE,
     observacoes     TEXT,
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    criado_em       TIMESTAMP   NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_animal           PRIMARY KEY (id_animal),
     CONSTRAINT fk_animal_tutor     FOREIGN KEY (id_tutor)
-        REFERENCES tutor (id_tutor) ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES tutor (id_tutor) ON DELETE RESTRICT,
     CONSTRAINT fk_animal_raca      FOREIGN KEY (id_raca)
-        REFERENCES raca (id_raca)   ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES raca (id_raca)   ON DELETE RESTRICT,
     CONSTRAINT uq_animal_microchip UNIQUE (microchip),
     CONSTRAINT ck_animal_sexo      CHECK (sexo IN ('M', 'F')),
-    CONSTRAINT ck_animal_microchip CHECK (microchip ~ '^[0-9]{15}$'),
+    CONSTRAINT ck_animal_microchip CHECK (LENGTH(microchip) = 15),
     CONSTRAINT ck_animal_obito     CHECK (data_obito IS NULL OR data_obito >= data_nascimento)
 );
 COMMENT ON TABLE  animal            IS 'Paciente da clínica. Cada animal pertence a exatamente um tutor.';
@@ -262,12 +269,12 @@ COMMENT ON COLUMN animal.data_obito IS 'Preenchida em caso de óbito; o históri
 
 -- 2.3 Veterinário ----------------------------------------------------------
 CREATE TABLE veterinario (
-    id_veterinario INTEGER      GENERATED BY DEFAULT AS IDENTITY,
-    nome           VARCHAR(120) NOT NULL,
-    cpf            CHAR(11)     NOT NULL,
-    crmv           VARCHAR(8)   NOT NULL,
-    uf_crmv        CHAR(2)      NOT NULL,
-    email          VARCHAR(120) NOT NULL,
+    id_veterinario SERIAL,
+    nome           VARCHAR(120) CONSTRAINT nn_veterinario_nome  NOT NULL,
+    cpf            CHAR(11)     CONSTRAINT nn_veterinario_cpf   NOT NULL,
+    crmv           VARCHAR(8)   CONSTRAINT nn_veterinario_crmv  NOT NULL,
+    uf_crmv        CHAR(2)      CONSTRAINT nn_veterinario_uf    NOT NULL,
+    email          VARCHAR(120) CONSTRAINT nn_veterinario_email NOT NULL,
     telefone       VARCHAR(11),
     data_admissao  DATE         NOT NULL DEFAULT CURRENT_DATE,
     ativo          BOOLEAN      NOT NULL DEFAULT TRUE,
@@ -277,9 +284,8 @@ CREATE TABLE veterinario (
     CONSTRAINT uq_veterinario_crmv  UNIQUE (uf_crmv, crmv),
     CONSTRAINT uq_veterinario_email UNIQUE (email),
     CONSTRAINT ck_veterinario_cpf   CHECK (cpf_valido(cpf)),
-    CONSTRAINT ck_veterinario_crmv  CHECK (crmv ~ '^[0-9]{1,8}$'),
-    CONSTRAINT ck_veterinario_uf    CHECK (uf_crmv ~ '^[A-Z]{2}$'),
-    CONSTRAINT ck_veterinario_tel   CHECK (telefone ~ '^[0-9]{10,11}$')
+    CONSTRAINT ck_veterinario_uf    CHECK (uf_crmv = UPPER(uf_crmv)),
+    CONSTRAINT ck_veterinario_tel   CHECK (LENGTH(telefone) BETWEEN 10 AND 11)
 );
 COMMENT ON TABLE  veterinario       IS 'Médicos-veterinários do corpo clínico.';
 COMMENT ON COLUMN veterinario.crmv  IS 'Número de inscrição no CRMV. Único em conjunto com uf_crmv.';
@@ -287,14 +293,14 @@ COMMENT ON COLUMN veterinario.ativo IS 'FALSE para profissionais desligados (man
 
 -- 2.4 Veterinário x Especialidade (N:N) ------------------------------------
 CREATE TABLE veterinario_especialidade (
-    id_veterinario   INTEGER  NOT NULL,
-    id_especialidade SMALLINT NOT NULL,
+    id_veterinario   INTEGER,
+    id_especialidade INTEGER,
 
     CONSTRAINT pk_veterinario_especialidade PRIMARY KEY (id_veterinario, id_especialidade),
-    CONSTRAINT fk_vetesp_veterinario  FOREIGN KEY (id_veterinario)
-        REFERENCES veterinario (id_veterinario)     ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_vetesp_veterinario   FOREIGN KEY (id_veterinario)
+        REFERENCES veterinario (id_veterinario)     ON DELETE CASCADE,
     CONSTRAINT fk_vetesp_especialidade FOREIGN KEY (id_especialidade)
-        REFERENCES especialidade (id_especialidade) ON UPDATE CASCADE ON DELETE RESTRICT
+        REFERENCES especialidade (id_especialidade) ON DELETE RESTRICT
 );
 COMMENT ON TABLE veterinario_especialidade IS 'Associação N:N entre veterinários e especialidades.';
 
@@ -305,55 +311,49 @@ COMMENT ON TABLE veterinario_especialidade IS 'Associação N:N entre veterinár
 
 -- 3.1 Agendamento ----------------------------------------------------------
 CREATE TABLE agendamento (
-    id_agendamento      INTEGER      GENERATED BY DEFAULT AS IDENTITY,
-    id_animal           INTEGER      NOT NULL,
-    id_veterinario      INTEGER      NOT NULL,
-    data_hora_inicio    TIMESTAMPTZ  NOT NULL,
-    data_hora_fim       TIMESTAMPTZ  NOT NULL,
+    id_agendamento      SERIAL,
+    id_animal           INTEGER      CONSTRAINT nn_agendamento_animal NOT NULL,
+    id_veterinario      INTEGER      CONSTRAINT nn_agendamento_vet    NOT NULL,
+    data_hora_inicio    TIMESTAMP    CONSTRAINT nn_agendamento_inicio NOT NULL,
+    data_hora_fim       TIMESTAMP    CONSTRAINT nn_agendamento_fim    NOT NULL,
     tipo                VARCHAR(12)  NOT NULL DEFAULT 'CONSULTA',
     motivo              VARCHAR(200),
     status              VARCHAR(10)  NOT NULL DEFAULT 'AGENDADO',
     motivo_cancelamento VARCHAR(200),
-    criado_em           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    criado_em           TIMESTAMP    NOT NULL DEFAULT now(),
 
     CONSTRAINT pk_agendamento PRIMARY KEY (id_agendamento),
+    -- se o animal for apagado, os horários dele somem junto (CASCADE)
     CONSTRAINT fk_agendamento_animal FOREIGN KEY (id_animal)
-        REFERENCES animal (id_animal)           ON UPDATE CASCADE ON DELETE CASCADE,
+        REFERENCES animal (id_animal)           ON DELETE CASCADE,
+    -- veterinário com horários não pode ser apagado (RESTRICT)
     CONSTRAINT fk_agendamento_veterinario FOREIGN KEY (id_veterinario)
-        REFERENCES veterinario (id_veterinario) ON UPDATE CASCADE ON DELETE RESTRICT,
-    -- chave candidata usada pela FK composta de atendimento (garante que o
-    -- atendimento vinculado a um agendamento seja do MESMO animal)
-    CONSTRAINT uq_agendamento_animal UNIQUE (id_agendamento, id_animal),
+        REFERENCES veterinario (id_veterinario) ON DELETE RESTRICT,
     CONSTRAINT ck_agendamento_periodo CHECK (data_hora_fim > data_hora_inicio),
     CONSTRAINT ck_agendamento_duracao CHECK (data_hora_fim - data_hora_inicio <= INTERVAL '8 hours'),
     CONSTRAINT ck_agendamento_tipo    CHECK (tipo IN
         ('CONSULTA', 'RETORNO', 'VACINACAO', 'EXAME', 'CIRURGIA')),
     CONSTRAINT ck_agendamento_status  CHECK (status IN ('AGENDADO', 'REALIZADO', 'CANCELADO')),
+    -- cancelado precisa de motivo; os demais status não podem ter motivo de cancelamento
     CONSTRAINT ck_agendamento_cancel  CHECK (
-        (status = 'CANCELADO') = (motivo_cancelamento IS NOT NULL)),
-    -- um veterinário não pode ter dois horários ativos sobrepostos
-    CONSTRAINT ex_agendamento_conflito_vet EXCLUDE USING gist (
-        id_veterinario WITH =,
-        tstzrange(data_hora_inicio, data_hora_fim, '[)') WITH &&
-    ) WHERE (status <> 'CANCELADO')
+        (status =  'CANCELADO' AND motivo_cancelamento IS NOT NULL) OR
+        (status <> 'CANCELADO' AND motivo_cancelamento IS NULL))
 );
 COMMENT ON TABLE  agendamento        IS 'Agenda de horários. Ciclo de vida: AGENDADO -> REALIZADO | CANCELADO.';
 COMMENT ON COLUMN agendamento.status IS 'AGENDADO, REALIZADO ou CANCELADO. Vira REALIZADO automaticamente quando um atendimento é vinculado.';
 COMMENT ON COLUMN agendamento.motivo_cancelamento IS 'Obrigatório se, e somente se, status = CANCELADO.';
-COMMENT ON CONSTRAINT ex_agendamento_conflito_vet ON agendamento IS
-    'Impede horários sobrepostos para o mesmo veterinário (agendamentos cancelados não contam).';
 
 -- 3.2 Atendimento ----------------------------------------------------------
 CREATE TABLE atendimento (
-    id_atendimento   INTEGER      GENERATED BY DEFAULT AS IDENTITY,
-    id_animal        INTEGER      NOT NULL,
-    id_veterinario   INTEGER      NOT NULL,
+    id_atendimento   SERIAL,
+    id_animal        INTEGER      CONSTRAINT nn_atendimento_animal NOT NULL,
+    id_veterinario   INTEGER      CONSTRAINT nn_atendimento_vet    NOT NULL,
     id_agendamento   INTEGER,
-    data_hora_inicio TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    data_hora_fim    TIMESTAMPTZ,
+    data_hora_inicio TIMESTAMP    NOT NULL DEFAULT now(),
+    data_hora_fim    TIMESTAMP,
     carater          VARCHAR(10)  NOT NULL DEFAULT 'ELETIVO',
     status           VARCHAR(10)  NOT NULL DEFAULT 'EM_ABERTO',
-    queixa_principal TEXT         NOT NULL,
+    queixa_principal TEXT         CONSTRAINT nn_atendimento_queixa NOT NULL,
     anamnese         TEXT,
     exame_fisico     TEXT,
     diagnostico      TEXT,
@@ -363,17 +363,19 @@ CREATE TABLE atendimento (
 
     CONSTRAINT pk_atendimento PRIMARY KEY (id_atendimento),
     CONSTRAINT fk_atendimento_animal FOREIGN KEY (id_animal)
-        REFERENCES animal (id_animal)           ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES animal (id_animal)             ON DELETE RESTRICT,
     CONSTRAINT fk_atendimento_veterinario FOREIGN KEY (id_veterinario)
-        REFERENCES veterinario (id_veterinario) ON UPDATE CASCADE ON DELETE RESTRICT,
-    -- FK composta: o agendamento (se houver) precisa ser do mesmo animal
-    CONSTRAINT fk_atendimento_agendamento FOREIGN KEY (id_agendamento, id_animal)
-        REFERENCES agendamento (id_agendamento, id_animal) ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES veterinario (id_veterinario)   ON DELETE RESTRICT,
+    CONSTRAINT fk_atendimento_agendamento FOREIGN KEY (id_agendamento)
+        REFERENCES agendamento (id_agendamento)   ON DELETE RESTRICT,
+    -- um agendamento gera no máximo um atendimento
     CONSTRAINT uq_atendimento_agendamento UNIQUE (id_agendamento),
     CONSTRAINT ck_atendimento_carater CHECK (carater IN ('ELETIVO', 'URGENCIA', 'EMERGENCIA')),
     CONSTRAINT ck_atendimento_status  CHECK (status IN ('EM_ABERTO', 'FINALIZADO')),
+    -- só o atendimento finalizado tem data/hora de término
     CONSTRAINT ck_atendimento_fim     CHECK (
-        (status = 'FINALIZADO') = (data_hora_fim IS NOT NULL)),
+        (status =  'FINALIZADO' AND data_hora_fim IS NOT NULL) OR
+        (status <> 'FINALIZADO' AND data_hora_fim IS NULL)),
     CONSTRAINT ck_atendimento_periodo CHECK (data_hora_fim IS NULL OR data_hora_fim >= data_hora_inicio),
     CONSTRAINT ck_atendimento_peso    CHECK (peso_kg > 0),
     CONSTRAINT ck_atendimento_temp    CHECK (temperatura_c BETWEEN 30 AND 45)
@@ -386,17 +388,18 @@ COMMENT ON COLUMN atendimento.temperatura_c  IS 'Temperatura corporal em °C.';
 
 -- 3.3 Procedimentos realizados no atendimento (N:N) ------------------------
 CREATE TABLE atendimento_procedimento (
-    id_atendimento  INTEGER       NOT NULL,
-    id_procedimento INTEGER       NOT NULL,
-    quantidade      SMALLINT      NOT NULL DEFAULT 1,
-    valor_unitario  NUMERIC(10,2) NOT NULL,
+    id_atendimento  INTEGER,
+    id_procedimento INTEGER,
+    quantidade      INTEGER       NOT NULL DEFAULT 1,
+    valor_unitario  NUMERIC(10,2) CONSTRAINT nn_atproc_valor NOT NULL,
     observacao      VARCHAR(200),
 
     CONSTRAINT pk_atendimento_procedimento PRIMARY KEY (id_atendimento, id_procedimento),
+    -- se o atendimento for apagado, os itens dele somem junto
     CONSTRAINT fk_atproc_atendimento  FOREIGN KEY (id_atendimento)
-        REFERENCES atendimento (id_atendimento)   ON UPDATE CASCADE ON DELETE CASCADE,
+        REFERENCES atendimento (id_atendimento)   ON DELETE CASCADE,
     CONSTRAINT fk_atproc_procedimento FOREIGN KEY (id_procedimento)
-        REFERENCES procedimento (id_procedimento) ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES procedimento (id_procedimento) ON DELETE RESTRICT,
     CONSTRAINT ck_atproc_quantidade CHECK (quantidade > 0),
     CONSTRAINT ck_atproc_valor      CHECK (valor_unitario >= 0)
 );
@@ -405,21 +408,22 @@ COMMENT ON COLUMN atendimento_procedimento.valor_unitario IS 'Preço praticado n
 
 -- 3.4 Prescrição -----------------------------------------------------------
 CREATE TABLE prescricao (
-    id_prescricao     INTEGER      GENERATED BY DEFAULT AS IDENTITY,
-    id_atendimento    INTEGER      NOT NULL,
-    id_medicamento    INTEGER      NOT NULL,
-    dose_quantidade   NUMERIC(8,3) NOT NULL,
-    dose_unidade      VARCHAR(10)  NOT NULL,
-    via_administracao VARCHAR(13)  NOT NULL,
-    frequencia_horas  SMALLINT     NOT NULL,
-    duracao_dias      SMALLINT,
+    id_prescricao     SERIAL,
+    id_atendimento    INTEGER      CONSTRAINT nn_prescricao_atendimento NOT NULL,
+    id_medicamento    INTEGER      CONSTRAINT nn_prescricao_medicamento NOT NULL,
+    dose_quantidade   NUMERIC(8,3) CONSTRAINT nn_prescricao_dose        NOT NULL,
+    dose_unidade      VARCHAR(10)  CONSTRAINT nn_prescricao_unidade     NOT NULL,
+    via_administracao VARCHAR(13)  CONSTRAINT nn_prescricao_via         NOT NULL,
+    frequencia_horas  INTEGER      CONSTRAINT nn_prescricao_freq        NOT NULL,
+    duracao_dias      INTEGER,
     instrucoes        TEXT,
 
     CONSTRAINT pk_prescricao PRIMARY KEY (id_prescricao),
     CONSTRAINT fk_prescricao_atendimento FOREIGN KEY (id_atendimento)
-        REFERENCES atendimento (id_atendimento) ON UPDATE CASCADE ON DELETE CASCADE,
+        REFERENCES atendimento (id_atendimento) ON DELETE CASCADE,
     CONSTRAINT fk_prescricao_medicamento FOREIGN KEY (id_medicamento)
-        REFERENCES medicamento (id_medicamento) ON UPDATE CASCADE ON DELETE RESTRICT,
+        REFERENCES medicamento (id_medicamento) ON DELETE RESTRICT,
+    -- o mesmo medicamento não aparece duas vezes na mesma receita
     CONSTRAINT uq_prescricao_item UNIQUE (id_atendimento, id_medicamento),
     CONSTRAINT ck_prescricao_dose CHECK (dose_quantidade > 0),
     CONSTRAINT ck_prescricao_unid CHECK (dose_unidade IN
@@ -436,12 +440,12 @@ COMMENT ON COLUMN prescricao.duracao_dias     IS 'Duração do tratamento em dia
 
 -- =============================================================================
 -- 4. ÍNDICES
---    PKs e UNIQUEs já criam índices B-tree automaticamente. Os índices abaixo
---    cobrem FKs (o PostgreSQL não indexa FKs sozinho) e os filtros/ordenações
---    mais frequentes das consultas de gestão.
+--    PKs e UNIQUEs já criam índices automaticamente. Os índices abaixo cobrem
+--    as chaves estrangeiras (o PostgreSQL não indexa FKs sozinho) e as colunas
+--    mais usadas em filtros e ordenações nas consultas de gestão.
 -- =============================================================================
 
--- FKs de navegação
+-- Chaves estrangeiras usadas nas junções
 CREATE INDEX ix_animal_tutor            ON animal (id_tutor);
 CREATE INDEX ix_animal_raca             ON animal (id_raca);
 CREATE INDEX ix_agendamento_animal      ON agendamento (id_animal);
@@ -451,55 +455,95 @@ CREATE INDEX ix_vetesp_especialidade    ON veterinario_especialidade (id_especia
 CREATE INDEX ix_procesp_especie         ON procedimento_especie (id_especie);
 CREATE INDEX ix_medesp_especie          ON medicamento_especie (id_especie);
 
--- Histórico clínico: "atendimentos do animal X, do mais recente ao mais antigo"
-CREATE INDEX ix_atendimento_animal_data ON atendimento (id_animal, data_hora_inicio DESC);
+-- Histórico clínico: atendimentos de um animal, por data
+CREATE INDEX ix_atendimento_animal_data ON atendimento (id_animal, data_hora_inicio);
 
--- Produtividade: "atendimentos do veterinário Y no período [a, b]"
+-- Produtividade: atendimentos de um veterinário em um período
 CREATE INDEX ix_atendimento_vet_data    ON atendimento (id_veterinario, data_hora_inicio);
 
--- Parciais: só indexam as linhas "vivas", ficam pequenos e rápidos
-CREATE INDEX ix_agendamento_futuro      ON agendamento (data_hora_inicio)
-    WHERE status = 'AGENDADO';
-CREATE INDEX ix_atendimento_em_aberto   ON atendimento (id_animal)
-    WHERE status = 'EM_ABERTO';
+-- Agenda: horários de um veterinário por data (também usado na checagem de conflito)
+CREATE INDEX ix_agendamento_vet_data    ON agendamento (id_veterinario, data_hora_inicio);
 
--- Busca de tutor por nome no balcão (LIKE 'mar%' sem diferenciar maiúsculas)
-CREATE INDEX ix_tutor_nome_lower        ON tutor (lower(nome) text_pattern_ops);
+-- Painel: agendamentos por situação e data / atendimentos em aberto
+CREATE INDEX ix_agendamento_status_data ON agendamento (status, data_hora_inicio);
+CREATE INDEX ix_atendimento_status      ON atendimento (status);
+
+-- Busca de tutor por nome no balcão
+CREATE INDEX ix_tutor_nome              ON tutor (nome);
 
 COMMENT ON INDEX ix_atendimento_animal_data IS 'Acelera a montagem do histórico clínico por animal (ordenado por data).';
 COMMENT ON INDEX ix_atendimento_vet_data    IS 'Acelera relatórios de produtividade por veterinário e período.';
-COMMENT ON INDEX ix_agendamento_futuro      IS 'Índice parcial para a agenda: considera só horários ainda não realizados/cancelados.';
-COMMENT ON INDEX ix_atendimento_em_aberto   IS 'Índice parcial para localizar rapidamente atendimentos/internações em curso.';
-COMMENT ON INDEX ix_tutor_nome_lower        IS 'Busca por prefixo do nome do tutor, sem diferenciar maiúsculas/minúsculas.';
+COMMENT ON INDEX ix_agendamento_vet_data    IS 'Acelera a agenda de cada veterinário e a verificação de conflito de horário.';
+COMMENT ON INDEX ix_agendamento_status_data IS 'Acelera a busca de horários futuros ainda não realizados.';
+COMMENT ON INDEX ix_atendimento_status      IS 'Acelera a busca de atendimentos/internações em aberto.';
+COMMENT ON INDEX ix_tutor_nome              IS 'Acelera a busca de tutor pelo nome.';
 
 
 -- =============================================================================
--- 5. REGRAS DE NEGÓCIO EM GATILHOS
+-- 5. REGRAS DE NEGÓCIO EM GATILHOS (TRIGGERS)
 -- =============================================================================
 
--- 5.1 Vincular atendimento ao agendamento ---------------------------------
+-- 5.1 Conflito de agenda ---------------------------------------------------
+--  Um veterinário não pode ter dois horários ativos que se sobreponham.
+--  Dois intervalos [A, B) e [C, D) se sobrepõem quando A < D e C < B.
+--  Horários cancelados não contam.
+CREATE OR REPLACE FUNCTION fn_agendamento_conflito()
+RETURNS trigger AS
+$$
+BEGIN
+    IF NEW.status <> 'CANCELADO' AND EXISTS (
+        SELECT 1
+          FROM agendamento a
+         WHERE a.id_veterinario   = NEW.id_veterinario
+           AND a.id_agendamento  <> NEW.id_agendamento
+           AND a.status          <> 'CANCELADO'
+           AND a.data_hora_inicio < NEW.data_hora_fim
+           AND NEW.data_hora_inicio < a.data_hora_fim
+    ) THEN
+        RAISE EXCEPTION 'O veterinário % já tem um horário marcado que se sobrepõe a este.',
+                        NEW.id_veterinario;
+    END IF;
+
+    RETURN NEW;
+END
+$$
+LANGUAGE plpgsql;
+COMMENT ON FUNCTION fn_agendamento_conflito() IS
+    'Impede horários sobrepostos para o mesmo veterinário (agendamentos cancelados não contam).';
+
+CREATE TRIGGER trg_agendamento_conflito
+    BEFORE INSERT OR UPDATE ON agendamento
+    FOR EACH ROW EXECUTE FUNCTION fn_agendamento_conflito();
+
+-- 5.2 Vincular atendimento ao agendamento ---------------------------------
+--  * o agendamento precisa ser do MESMO animal do atendimento;
 --  * não permite atender um agendamento CANCELADO;
 --  * marca o agendamento como REALIZADO automaticamente.
 CREATE OR REPLACE FUNCTION fn_atendimento_vincula_agendamento()
-RETURNS trigger
-LANGUAGE plpgsql AS
+RETURNS trigger AS
 $$
 DECLARE
     v_status agendamento.status%TYPE;
+    v_animal agendamento.id_animal%TYPE;
 BEGIN
     IF NEW.id_agendamento IS NULL THEN
         RETURN NEW;
     END IF;
 
-    SELECT status INTO v_status
+    SELECT status, id_animal
+      INTO v_status, v_animal
       FROM agendamento
      WHERE id_agendamento = NEW.id_agendamento
        FOR UPDATE;
 
+    IF v_animal <> NEW.id_animal THEN
+        RAISE EXCEPTION 'Agendamento % é de outro animal e não pode ser usado neste atendimento.',
+                        NEW.id_agendamento;
+    END IF;
+
     IF v_status = 'CANCELADO' THEN
         RAISE EXCEPTION 'Agendamento % está CANCELADO e não pode gerar atendimento.',
-                        NEW.id_agendamento
-              USING ERRCODE = 'check_violation';
+                        NEW.id_agendamento;
     END IF;
 
     UPDATE agendamento
@@ -508,46 +552,47 @@ BEGIN
        AND status <> 'REALIZADO';
 
     RETURN NEW;
-END;
-$$;
+END
+$$
+LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_atendimento_vincula_agendamento() IS
-    'Impede atendimento de agendamento cancelado e marca o agendamento como REALIZADO.';
+    'Confere animal e status do agendamento e o marca como REALIZADO.';
 
 CREATE TRIGGER trg_atendimento_vincula_agendamento
-    AFTER INSERT OR UPDATE OF id_agendamento ON atendimento
+    AFTER INSERT OR UPDATE ON atendimento
     FOR EACH ROW EXECUTE FUNCTION fn_atendimento_vincula_agendamento();
 
--- 5.2 Não atender animal após o óbito -------------------------------------
+-- 5.3 Não atender animal após o óbito -------------------------------------
 CREATE OR REPLACE FUNCTION fn_atendimento_valida_animal()
-RETURNS trigger
-LANGUAGE plpgsql AS
+RETURNS trigger AS
 $$
 DECLARE
     v_obito animal.data_obito%TYPE;
 BEGIN
-    SELECT data_obito INTO v_obito FROM animal WHERE id_animal = NEW.id_animal;
+    SELECT data_obito INTO v_obito
+      FROM animal
+     WHERE id_animal = NEW.id_animal;
 
-    IF v_obito IS NOT NULL AND NEW.data_hora_inicio::date > v_obito THEN
+    IF v_obito IS NOT NULL AND DATE(NEW.data_hora_inicio) > v_obito THEN
         RAISE EXCEPTION 'Animal % teve óbito registrado em % e não pode receber novo atendimento.',
-                        NEW.id_animal, v_obito
-              USING ERRCODE = 'check_violation';
+                        NEW.id_animal, v_obito;
     END IF;
 
     RETURN NEW;
-END;
-$$;
+END
+$$
+LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_atendimento_valida_animal() IS
     'Bloqueia atendimentos com data posterior ao óbito do animal.';
 
 CREATE TRIGGER trg_atendimento_valida_animal
-    BEFORE INSERT OR UPDATE OF id_animal, data_hora_inicio ON atendimento
+    BEFORE INSERT OR UPDATE ON atendimento
     FOR EACH ROW EXECUTE FUNCTION fn_atendimento_valida_animal();
 
--- 5.3 Preço padrão do procedimento ----------------------------------------
+-- 5.4 Preço padrão do procedimento ----------------------------------------
 --  Se valor_unitario não for informado, usa o preço de tabela vigente.
 CREATE OR REPLACE FUNCTION fn_atproc_preco_padrao()
-RETURNS trigger
-LANGUAGE plpgsql AS
+RETURNS trigger AS
 $$
 BEGIN
     IF NEW.valor_unitario IS NULL THEN
@@ -555,9 +600,11 @@ BEGIN
           FROM procedimento
          WHERE id_procedimento = NEW.id_procedimento;
     END IF;
+
     RETURN NEW;
-END;
-$$;
+END
+$$
+LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_atproc_preco_padrao() IS
     'Preenche valor_unitario com o preco_base do procedimento quando omitido.';
 
@@ -565,125 +612,146 @@ CREATE TRIGGER trg_atproc_preco_padrao
     BEFORE INSERT ON atendimento_procedimento
     FOR EACH ROW EXECUTE FUNCTION fn_atproc_preco_padrao();
 
--- 5.4 Coerência do status do agendamento ----------------------------------
+-- 5.5 Coerência do status do agendamento ----------------------------------
 --  Um agendamento que já gerou atendimento não pode voltar a AGENDADO nem
 --  ser CANCELADO.
 CREATE OR REPLACE FUNCTION fn_agendamento_valida_status()
-RETURNS trigger
-LANGUAGE plpgsql AS
+RETURNS trigger AS
 $$
 BEGIN
-    IF NEW.status <> 'REALIZADO'
-       AND EXISTS (SELECT 1 FROM atendimento WHERE id_agendamento = NEW.id_agendamento) THEN
+    IF NEW.status <> 'REALIZADO' AND EXISTS (
+        SELECT 1 FROM atendimento WHERE id_agendamento = NEW.id_agendamento
+    ) THEN
         RAISE EXCEPTION 'Agendamento % já possui atendimento e deve permanecer REALIZADO.',
-                        NEW.id_agendamento
-              USING ERRCODE = 'check_violation';
+                        NEW.id_agendamento;
     END IF;
+
     RETURN NEW;
-END;
-$$;
+END
+$$
+LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_agendamento_valida_status() IS
     'Impede cancelar ou reabrir um agendamento que já gerou atendimento.';
 
 CREATE TRIGGER trg_agendamento_valida_status
-    BEFORE UPDATE OF status ON agendamento
+    BEFORE UPDATE ON agendamento
     FOR EACH ROW EXECUTE FUNCTION fn_agendamento_valida_status();
 
--- 5.5 Procedimento e medicamento compatíveis com a espécie ----------------
---  Uma única função atende às duas tabelas: TG_TABLE_NAME diz qual disparou.
---  A espécie do paciente é obtida pela cadeia atendimento -> animal -> raça.
-CREATE OR REPLACE FUNCTION fn_valida_especie()
-RETURNS trigger
-LANGUAGE plpgsql AS
+-- 5.6 Procedimento compatível com a espécie -------------------------------
+--  Se o procedimento tem espécies cadastradas em procedimento_especie, a
+--  espécie do animal atendido precisa estar entre elas.
+CREATE OR REPLACE FUNCTION fn_atproc_valida_especie()
+RETURNS trigger AS
 $$
 DECLARE
     v_id_especie especie.id_especie%TYPE;
     v_especie    especie.nome%TYPE;
     v_animal     animal.nome%TYPE;
-    v_item       TEXT;
+    v_item       procedimento.nome%TYPE;
+BEGIN
+    -- espécie do animal: atendimento -> animal -> raça -> espécie
+    SELECT e.id_especie, e.nome, an.nome
+      INTO v_id_especie, v_especie, v_animal
+      FROM atendimento at
+     INNER JOIN animal  an ON an.id_animal = at.id_animal
+     INNER JOIN raca    r  ON r.id_raca    = an.id_raca
+     INNER JOIN especie e  ON e.id_especie = r.id_especie
+     WHERE at.id_atendimento = NEW.id_atendimento;
+
+    IF EXISTS (SELECT 1 FROM procedimento_especie WHERE id_procedimento = NEW.id_procedimento)
+       AND v_id_especie NOT IN (SELECT id_especie
+                                  FROM procedimento_especie
+                                 WHERE id_procedimento = NEW.id_procedimento) THEN
+        SELECT nome INTO v_item FROM procedimento WHERE id_procedimento = NEW.id_procedimento;
+        RAISE EXCEPTION 'O procedimento "%" não é indicado para a espécie % (animal: %).',
+                        v_item, v_especie, v_animal;
+    END IF;
+
+    RETURN NEW;
+END
+$$
+LANGUAGE plpgsql;
+COMMENT ON FUNCTION fn_atproc_valida_especie() IS
+    'Barra procedimento não indicado para a espécie do animal atendido.';
+
+CREATE TRIGGER trg_atproc_valida_especie
+    BEFORE INSERT OR UPDATE ON atendimento_procedimento
+    FOR EACH ROW EXECUTE FUNCTION fn_atproc_valida_especie();
+
+-- 5.7 Medicamento compatível com a espécie --------------------------------
+CREATE OR REPLACE FUNCTION fn_prescricao_valida_especie()
+RETURNS trigger AS
+$$
+DECLARE
+    v_id_especie especie.id_especie%TYPE;
+    v_especie    especie.nome%TYPE;
+    v_animal     animal.nome%TYPE;
+    v_item       medicamento.nome_comercial%TYPE;
 BEGIN
     SELECT e.id_especie, e.nome, an.nome
       INTO v_id_especie, v_especie, v_animal
       FROM atendimento at
-      JOIN animal  an ON an.id_animal  = at.id_animal
-      JOIN raca    r  ON r.id_raca     = an.id_raca
-      JOIN especie e  ON e.id_especie  = r.id_especie
+     INNER JOIN animal  an ON an.id_animal = at.id_animal
+     INNER JOIN raca    r  ON r.id_raca    = an.id_raca
+     INNER JOIN especie e  ON e.id_especie = r.id_especie
      WHERE at.id_atendimento = NEW.id_atendimento;
 
-    IF TG_TABLE_NAME = 'atendimento_procedimento' THEN
-        -- restrito (tem linhas) E a espécie do animal não está entre elas
-        IF EXISTS (SELECT 1 FROM procedimento_especie
-                    WHERE id_procedimento = NEW.id_procedimento)
-           AND NOT EXISTS (SELECT 1 FROM procedimento_especie
-                            WHERE id_procedimento = NEW.id_procedimento
-                              AND id_especie      = v_id_especie) THEN
-            SELECT nome INTO v_item FROM procedimento WHERE id_procedimento = NEW.id_procedimento;
-            RAISE EXCEPTION 'O procedimento "%" não é indicado para a espécie % (animal: %).',
-                            v_item, v_especie, v_animal
-                  USING ERRCODE = 'check_violation';
-        END IF;
-    ELSE  -- prescricao
-        IF EXISTS (SELECT 1 FROM medicamento_especie
-                    WHERE id_medicamento = NEW.id_medicamento)
-           AND NOT EXISTS (SELECT 1 FROM medicamento_especie
-                            WHERE id_medicamento = NEW.id_medicamento
-                              AND id_especie     = v_id_especie) THEN
-            SELECT nome_comercial INTO v_item FROM medicamento WHERE id_medicamento = NEW.id_medicamento;
-            RAISE EXCEPTION 'O medicamento "%" não é indicado para a espécie % (animal: %).',
-                            v_item, v_especie, v_animal
-                  USING ERRCODE = 'check_violation';
-        END IF;
+    IF EXISTS (SELECT 1 FROM medicamento_especie WHERE id_medicamento = NEW.id_medicamento)
+       AND v_id_especie NOT IN (SELECT id_especie
+                                  FROM medicamento_especie
+                                 WHERE id_medicamento = NEW.id_medicamento) THEN
+        SELECT nome_comercial INTO v_item FROM medicamento WHERE id_medicamento = NEW.id_medicamento;
+        RAISE EXCEPTION 'O medicamento "%" não é indicado para a espécie % (animal: %).',
+                        v_item, v_especie, v_animal;
     END IF;
 
     RETURN NEW;
-END;
-$$;
-COMMENT ON FUNCTION fn_valida_especie() IS
-    'Barra procedimento ou prescrição incompatível com a espécie do animal atendido.';
-
-CREATE TRIGGER trg_atproc_valida_especie
-    BEFORE INSERT OR UPDATE OF id_procedimento, id_atendimento ON atendimento_procedimento
-    FOR EACH ROW EXECUTE FUNCTION fn_valida_especie();
+END
+$$
+LANGUAGE plpgsql;
+COMMENT ON FUNCTION fn_prescricao_valida_especie() IS
+    'Barra prescrição de medicamento não indicado para a espécie do animal atendido.';
 
 CREATE TRIGGER trg_prescricao_valida_especie
-    BEFORE INSERT OR UPDATE OF id_medicamento, id_atendimento ON prescricao
-    FOR EACH ROW EXECUTE FUNCTION fn_valida_especie();
+    BEFORE INSERT OR UPDATE ON prescricao
+    FOR EACH ROW EXECUTE FUNCTION fn_prescricao_valida_especie();
 
 
 -- =============================================================================
--- 6. VISÕES
+-- 6. VISÕES (VIEWS)
 -- =============================================================================
 
 -- 6.1 Animal com espécie, raça, tutor e idade -----------------------------
+--  Idade em anos: diferença de datas em dias dividida por 365 (divisão inteira).
 CREATE OR REPLACE VIEW vw_animal AS
 SELECT a.id_animal,
-       a.nome                                   AS animal,
-       e.nome                                   AS especie,
-       r.nome                                   AS raca,
+       a.nome                AS animal,
+       e.nome                AS especie,
+       r.nome                AS raca,
        a.sexo,
        a.castrado,
        a.data_nascimento,
-       date_part('year', age(COALESCE(a.data_obito, CURRENT_DATE), a.data_nascimento))::int
-                                                AS idade_anos,
-       (a.data_obito IS NULL)                   AS vivo,
+       (COALESCE(a.data_obito, CURRENT_DATE) - a.data_nascimento) / 365 AS idade_anos,
+       (a.data_obito IS NULL) AS vivo,
        t.id_tutor,
-       t.nome                                   AS tutor,
-       t.telefone                               AS telefone_tutor
-  FROM animal  a
-  JOIN raca    r ON r.id_raca    = a.id_raca
-  JOIN especie e ON e.id_especie = r.id_especie
-  JOIN tutor   t ON t.id_tutor   = a.id_tutor;
+       t.nome                AS tutor,
+       t.telefone            AS telefone_tutor
+  FROM animal a
+ INNER JOIN raca    r ON r.id_raca    = a.id_raca
+ INNER JOIN especie e ON e.id_especie = r.id_especie
+ INNER JOIN tutor   t ON t.id_tutor   = a.id_tutor;
 COMMENT ON VIEW vw_animal IS 'Animal enriquecido com espécie, raça, idade e tutor.';
 
 -- 6.2 Histórico clínico ----------------------------------------------------
---  Uma linha por atendimento, com procedimentos e prescrições resumidos.
+--  Uma linha por atendimento. Valor total e quantidades vêm de subconsultas
+--  escalares correlacionadas (uma por atendimento).
 CREATE OR REPLACE VIEW vw_historico_clinico AS
 SELECT at.id_atendimento,
        at.id_animal,
-       an.nome                         AS animal,
-       e.nome                          AS especie,
-       t.nome                          AS tutor,
-       v.nome                          AS veterinario,
+       an.nome AS animal,
+       e.nome  AS especie,
+       t.nome  AS tutor,
+       v.nome  AS veterinario,
        at.data_hora_inicio,
        at.data_hora_fim,
        at.status,
@@ -692,38 +760,20 @@ SELECT at.id_atendimento,
        at.diagnostico,
        at.peso_kg,
        at.temperatura_c,
-       proc.procedimentos,
-       proc.valor_total,
-       presc.prescricoes
-  FROM atendimento at
-  JOIN animal      an ON an.id_animal      = at.id_animal
-  JOIN raca        r  ON r.id_raca         = an.id_raca
-  JOIN especie     e  ON e.id_especie      = r.id_especie
-  JOIN tutor       t  ON t.id_tutor        = an.id_tutor
-  JOIN veterinario v  ON v.id_veterinario  = at.id_veterinario
-  LEFT JOIN LATERAL (
-        SELECT string_agg(p.nome, '; ' ORDER BY p.nome)          AS procedimentos,
-               SUM(ap.quantidade * ap.valor_unitario)            AS valor_total
+       (SELECT COALESCE(SUM(ap.quantidade * ap.valor_unitario), 0)
           FROM atendimento_procedimento ap
-          JOIN procedimento p ON p.id_procedimento = ap.id_procedimento
-         WHERE ap.id_atendimento = at.id_atendimento
-       ) proc ON TRUE
-  LEFT JOIN LATERAL (
-        SELECT string_agg(
-                   m.nome_comercial || ' ' || m.concentracao || ' — '
-                   || replace(rtrim(to_char(pr.dose_quantidade, 'FM9990.999'), '.'), '.', ',')
-                   || ' ' || pr.dose_unidade
-                   || CASE WHEN pr.dose_quantidade > 1
-                            AND pr.dose_unidade IN ('comprimido', 'capsula', 'gota', 'aplicacao', 'pipeta')
-                           THEN 's' ELSE '' END
-                   || ' a cada ' || pr.frequencia_horas || ' h'
-                   || COALESCE(' por ' || pr.duracao_dias || ' dia(s)', ''),
-                   '; ' ORDER BY m.nome_comercial)               AS prescricoes
-          FROM prescricao  pr
-          JOIN medicamento m ON m.id_medicamento = pr.id_medicamento
-         WHERE pr.id_atendimento = at.id_atendimento
-       ) presc ON TRUE;
+         WHERE ap.id_atendimento = at.id_atendimento) AS valor_total,
+       (SELECT COUNT(*)
+          FROM atendimento_procedimento ap
+         WHERE ap.id_atendimento = at.id_atendimento) AS qtd_procedimentos,
+       (SELECT COUNT(*)
+          FROM prescricao pr
+         WHERE pr.id_atendimento = at.id_atendimento) AS qtd_prescricoes
+  FROM atendimento at
+ INNER JOIN animal      an ON an.id_animal     = at.id_animal
+ INNER JOIN raca        r  ON r.id_raca        = an.id_raca
+ INNER JOIN especie     e  ON e.id_especie     = r.id_especie
+ INNER JOIN tutor       t  ON t.id_tutor       = an.id_tutor
+ INNER JOIN veterinario v  ON v.id_veterinario = at.id_veterinario;
 COMMENT ON VIEW vw_historico_clinico IS
-    'Histórico clínico: cada atendimento com procedimentos, valor e prescrições consolidados.';
-
-COMMIT;
+    'Histórico clínico: cada atendimento com animal, tutor, veterinário, valor total e quantidade de itens.';

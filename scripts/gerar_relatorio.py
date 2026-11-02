@@ -100,8 +100,13 @@ def ddl_table(ddl: str, name: str) -> str:
 
 
 def ddl_function(ddl: str, name: str) -> str:
-    m = re.search(rf"^CREATE OR REPLACE FUNCTION {name}\(\).*?^\$\$;", ddl, re.M | re.S)
+    m = re.search(rf"^CREATE OR REPLACE FUNCTION {name}\(.*?^LANGUAGE plpgsql;", ddl, re.M | re.S)
     return code(m.group(0))
+
+
+def n_indices(cur) -> int:
+    cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'clinica'")
+    return cur.fetchone()[0]
 
 
 def counts(cur) -> str:
@@ -132,7 +137,8 @@ def main():
             "RES": lambda k: result_table(cur, queries[k]),
             "DDL": lambda k: ddl_table(ddl, k),
             "FUNC": lambda k: ddl_function(ddl, k),
-            "FUNC2": lambda k: code(re.search(rf"^CREATE OR REPLACE FUNCTION {k}\(.*?^\$\$;", ddl, re.M | re.S).group(0)),
+            "FUNC2": lambda k: ddl_function(ddl, k),
+            "NIDX": lambda _: str(n_indices(cur)),
         }
 
         def sub(m):

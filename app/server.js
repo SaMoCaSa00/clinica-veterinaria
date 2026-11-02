@@ -87,13 +87,13 @@ app.get('/api/agenda', rota(async (req) => {
 
 app.post('/api/agendamentos', rota(async (req) => {
   const { id_animal, id_veterinario, inicio, duracao_min, tipo, motivo } = req.body;
-  // "inicio" vem do formulário como horário local (YYYY-MM-DDTHH:MM);
-  // o banco interpreta no fuso da sessão (America/Sao_Paulo).
+  // "inicio" vem do formulário como horário local (YYYY-MM-DDTHH:MM).
+  // O fim é o início + a duração escolhida, em minutos.
   const { rows } = await query(`
     INSERT INTO agendamento (id_animal, id_veterinario, data_hora_inicio, data_hora_fim, tipo, motivo)
-    VALUES ($1, $2, $3::timestamp, $3::timestamp + make_interval(mins => $4), $5, $6)
+    VALUES ($1, $2, CAST($3 AS TIMESTAMP), CAST($3 AS TIMESTAMP) + CAST($4 AS INTERVAL), $5, $6)
     RETURNING id_agendamento`,
-    [id_animal, id_veterinario, inicio, Number(duracao_min) || 30, tipo, vazioParaNull(motivo)]);
+    [id_animal, id_veterinario, inicio, `${Number(duracao_min) || 30} minutes`, tipo, vazioParaNull(motivo)]);
   return rows[0];
 }));
 
@@ -110,16 +110,20 @@ app.post('/api/agendamentos/:id/cancelar', rota(async (req) => {
 
 // ---------------------------------------------------------------- tutores
 app.get('/api/tutores', rota(async (req) => {
-  const { rows } = await query(`
-    SELECT t.id_tutor, t.nome, t.cpf, t.telefone, t.email, t.cidade, t.uf,
-           count(a.id_animal) AS qtd_animais,
-           string_agg(a.nome, ', ' ORDER BY a.nome) AS animais
-      FROM tutor t
-      LEFT JOIN animal a ON a.id_tutor = t.id_tutor
-     WHERE $1::text IS NULL OR lower(t.nome) LIKE lower($1) || '%' OR t.cpf LIKE $1 || '%'
-     GROUP BY t.id_tutor
-     ORDER BY t.nome`, [vazioParaNull(req.query.q)]);
-  return rows;
+  const busca = (req.query.q || '').trim();
+  const [tutores, animais] = await Promise.all([
+    query(`
+      SELECT t.id_tutor, t.nome, t.cpf, t.telefone, t.email, t.cidade, t.uf
+        FROM tutor t
+       WHERE LOWER(t.nome) LIKE LOWER($1) || '%' OR t.cpf LIKE $1 || '%'
+       ORDER BY t.nome`, [busca]),
+    query(`SELECT id_tutor, nome FROM animal ORDER BY nome`),
+  ]);
+  // junta a lista de animais de cada tutor aqui no JavaScript
+  return tutores.rows.map((t) => {
+    const nomes = animais.rows.filter((a) => a.id_tutor === t.id_tutor).map((a) => a.nome);
+    return { ...t, qtd_animais: nomes.length, animais: nomes.join(', ') };
+  });
 }));
 
 app.post('/api/tutores', rota(async (req) => {
@@ -139,12 +143,15 @@ app.post('/api/tutores', rota(async (req) => {
 
 // ---------------------------------------------------------------- animais
 app.get('/api/animais', rota(async (req) => {
+  const especie = (req.query.especie || '').trim();
+  const busca = (req.query.q || '').trim();
   const { rows } = await query(`
-    SELECT a.*, (SELECT max(data_hora_inicio) FROM atendimento WHERE id_animal = a.id_animal) AS ultimo_atendimento
+    SELECT a.*,
+           (SELECT MAX(data_hora_inicio) FROM atendimento WHERE id_animal = a.id_animal) AS ultimo_atendimento
       FROM vw_animal a
-     WHERE ($1::text IS NULL OR a.especie = $1)
-       AND ($2::text IS NULL OR lower(a.animal) LIKE lower($2) || '%' OR lower(a.tutor) LIKE '%' || lower($2) || '%')
-     ORDER BY a.animal`, [vazioParaNull(req.query.especie), vazioParaNull(req.query.q)]);
+     WHERE (a.especie = $1 OR $1 = '')
+       AND (LOWER(a.animal) LIKE LOWER($2) || '%' OR LOWER(a.tutor) LIKE '%' || LOWER($2) || '%')
+     ORDER BY a.animal`, [especie, busca]);
   return rows;
 }));
 
@@ -162,20 +169,42 @@ app.post('/api/animais', rota(async (req) => {
 // Prontuário: dados do animal + histórico clínico (visão) + agenda do animal
 app.get('/api/animais/:id', rota(async (req) => {
   const id = req.params.id;
-  const [animal, historico, agenda] = await Promise.all([
+  const [animal, historico, procedimentos, prescricoes, agenda] = await Promise.all([
     query(`SELECT a.*, an.microchip, an.pelagem, an.data_obito, an.observacoes, t.email AS email_tutor
              FROM vw_animal a
-             JOIN animal an ON an.id_animal = a.id_animal
-             JOIN tutor  t  ON t.id_tutor   = a.id_tutor
+            INNER JOIN animal an ON an.id_animal = a.id_animal
+            INNER JOIN tutor  t  ON t.id_tutor   = a.id_tutor
             WHERE a.id_animal = $1`, [id]),
     query(`SELECT * FROM vw_historico_clinico WHERE id_animal = $1 ORDER BY data_hora_inicio DESC`, [id]),
+    // procedimentos de todos os atendimentos do animal
+    query(`SELECT ap.id_atendimento, p.nome
+             FROM atendimento_procedimento ap
+            INNER JOIN procedimento p  ON p.id_procedimento = ap.id_procedimento
+            INNER JOIN atendimento  at ON at.id_atendimento = ap.id_atendimento
+            WHERE at.id_animal = $1
+            ORDER BY p.nome`, [id]),
+    // prescrições de todos os atendimentos do animal
+    query(`SELECT pr.*, m.nome_comercial, m.concentracao
+             FROM prescricao pr
+            INNER JOIN medicamento m  ON m.id_medicamento  = pr.id_medicamento
+            INNER JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
+            WHERE at.id_animal = $1
+            ORDER BY m.nome_comercial`, [id]),
     query(`SELECT ag.*, v.nome AS veterinario
-             FROM agendamento ag JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
+             FROM agendamento ag
+            INNER JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
             WHERE ag.id_animal = $1 AND ag.status = 'AGENDADO' AND ag.data_hora_inicio > now()
             ORDER BY ag.data_hora_inicio`, [id]),
   ]);
   if (!animal.rows.length) throw Object.assign(new Error('Animal não encontrado.'), { code: 'P0001' });
-  return { animal: animal.rows[0], historico: historico.rows, agenda: agenda.rows };
+
+  // pendura os procedimentos e as prescrições em cada atendimento do histórico
+  const historicoCompleto = historico.rows.map((h) => ({
+    ...h,
+    procedimentos: procedimentos.rows.filter((p) => p.id_atendimento === h.id_atendimento).map((p) => p.nome),
+    prescricoes: prescricoes.rows.filter((p) => p.id_atendimento === h.id_atendimento),
+  }));
+  return { animal: animal.rows[0], historico: historicoCompleto, agenda: agenda.rows };
 }));
 
 
@@ -184,55 +213,77 @@ app.get('/api/animais/:id', rota(async (req) => {
 app.get('/api/relatorios', rota(async (req) => {
   const de = req.query.de || '2026-01-01';
   const ate = req.query.ate || '2026-12-31';
-  const [ranking, medicamentos, altoCusto] = await Promise.all([
+  const [ranking, medicamentos, altoCusto, media] = await Promise.all([
+    // Q2: atendimentos por veterinário no período (LEFT JOIN mantém quem tem zero)
     query(`
       SELECT v.nome AS veterinario, v.ativo,
-             count(at.id_atendimento)                                        AS atendimentos,
-             count(at.id_atendimento) FILTER (WHERE at.carater <> 'ELETIVO') AS urgencias,
-             RANK() OVER (ORDER BY count(at.id_atendimento) DESC)            AS posicao
+             COUNT(at.id_atendimento) AS atendimentos,
+             (SELECT COUNT(*)
+                FROM atendimento a2
+               WHERE a2.id_veterinario = v.id_veterinario
+                 AND a2.carater <> 'ELETIVO'
+                 AND a2.data_hora_inicio >= CAST($1 AS DATE)
+                 AND a2.data_hora_inicio <  CAST($2 AS DATE) + 1) AS urgencias
         FROM veterinario v
         LEFT JOIN atendimento at
                ON at.id_veterinario    = v.id_veterinario
-              AND at.data_hora_inicio >= $1::date
-              AND at.data_hora_inicio <  $2::date + 1
-       GROUP BY v.id_veterinario
-       ORDER BY posicao, v.nome`, [de, ate]),
+              AND at.data_hora_inicio >= CAST($1 AS DATE)
+              AND at.data_hora_inicio <  CAST($2 AS DATE) + 1
+       GROUP BY v.id_veterinario, v.nome, v.ativo
+       ORDER BY atendimentos DESC, v.nome`, [de, ate]),
+    // Q4: medicamentos por espécie, do mais prescrito ao menos
     query(`
-      WITH contagem AS (
-        SELECT e.nome AS especie, m.nome_comercial || ' ' || m.concentracao AS medicamento,
-               count(*) AS prescricoes
-          FROM prescricao pr
-          JOIN medicamento m  ON m.id_medicamento  = pr.id_medicamento
-          JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
-          JOIN animal an      ON an.id_animal      = at.id_animal
-          JOIN raca r         ON r.id_raca         = an.id_raca
-          JOIN especie e      ON e.id_especie      = r.id_especie
-         GROUP BY e.nome, m.id_medicamento
-      )
-      SELECT * FROM (
-        SELECT c.*, DENSE_RANK() OVER (PARTITION BY especie ORDER BY prescricoes DESC) AS posicao
-          FROM contagem c) x
-       WHERE posicao <= 3
-       ORDER BY especie, posicao, medicamento`),
+      SELECT e.nome AS especie, m.nome_comercial || ' ' || m.concentracao AS medicamento,
+             COUNT(*) AS prescricoes
+        FROM prescricao pr
+       INNER JOIN medicamento m  ON m.id_medicamento  = pr.id_medicamento
+       INNER JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
+       INNER JOIN animal an      ON an.id_animal      = at.id_animal
+       INNER JOIN raca r         ON r.id_raca         = an.id_raca
+       INNER JOIN especie e      ON e.id_especie      = r.id_especie
+       GROUP BY e.nome, m.id_medicamento, m.nome_comercial, m.concentracao
+       ORDER BY e.nome, prescricoes DESC, medicamento`),
+    // Q5: pacientes com gasto acima da média
     query(`
       SELECT an.id_animal, an.nome AS animal, e.nome AS especie, t.nome AS tutor,
-             SUM(ap.quantidade * ap.valor_unitario) AS gasto_total, round(m.media, 2) AS media
+             SUM(ap.quantidade * ap.valor_unitario) AS gasto_total
         FROM animal an
-        JOIN raca r    ON r.id_raca    = an.id_raca
-        JOIN especie e ON e.id_especie = r.id_especie
-        JOIN tutor t   ON t.id_tutor   = an.id_tutor
-        JOIN atendimento at              ON at.id_animal      = an.id_animal
-        JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
-        CROSS JOIN (SELECT avg(gasto) AS media FROM (
-               SELECT at2.id_animal, SUM(ap2.quantidade * ap2.valor_unitario) AS gasto
+       INNER JOIN raca r    ON r.id_raca    = an.id_raca
+       INNER JOIN especie e ON e.id_especie = r.id_especie
+       INNER JOIN tutor t   ON t.id_tutor   = an.id_tutor
+       INNER JOIN atendimento at              ON at.id_animal      = an.id_animal
+       INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+       GROUP BY an.id_animal, an.nome, e.nome, t.nome
+      HAVING SUM(ap.quantidade * ap.valor_unitario) > (
+             SELECT AVG(gasto) FROM (
+               SELECT SUM(ap2.quantidade * ap2.valor_unitario) AS gasto
                  FROM atendimento at2
-                 JOIN atendimento_procedimento ap2 ON ap2.id_atendimento = at2.id_atendimento
-                GROUP BY at2.id_animal) g) m
-       GROUP BY an.id_animal, e.nome, t.nome, m.media
-      HAVING SUM(ap.quantidade * ap.valor_unitario) > m.media
+                INNER JOIN atendimento_procedimento ap2 ON ap2.id_atendimento = at2.id_atendimento
+                GROUP BY at2.id_animal) gastos)
        ORDER BY gasto_total DESC`),
+    query(`
+      SELECT ROUND(AVG(gasto), 2) AS media FROM (
+        SELECT SUM(ap.quantidade * ap.valor_unitario) AS gasto
+          FROM atendimento at
+         INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+         GROUP BY at.id_animal) gastos`),
   ]);
-  return { ranking: ranking.rows, medicamentos: medicamentos.rows, altoCusto: altoCusto.rows };
+
+  // posição no ranking: empatados ficam na mesma posição (1º, 2º, 3º, 3º, 5º...)
+  ranking.rows.forEach((r, i, lista) => {
+    r.posicao = i > 0 && r.atendimentos === lista[i - 1].atendimentos ? lista[i - 1].posicao : i + 1;
+  });
+
+  // top 3 de cada espécie (empates entram juntos)
+  const top = [];
+  for (const m of medicamentos.rows) {
+    const daEspecie = top.filter((x) => x.especie === m.especie);
+    const ultimo = daEspecie[daEspecie.length - 1];
+    const nivel = !ultimo ? 1 : ultimo.prescricoes === m.prescricoes ? ultimo.nivel : ultimo.nivel + 1;
+    if (nivel <= 3) top.push({ ...m, nivel });
+  }
+
+  return { ranking: ranking.rows, medicamentos: top, altoCusto: altoCusto.rows, media: media.rows[0].media };
 }));
 
 

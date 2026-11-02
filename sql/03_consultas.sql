@@ -4,228 +4,154 @@
 -- -----------------------------------------------------------------------------
 --  Pré-requisito: 01_ddl.sql e 02_dml.sql executados.
 --  No pgAdmin, selecione uma consulta e pressione F5 para executar só ela.
---
---  Parâmetros (datas, animal etc.) ficam numa CTE "params" no topo de cada
---  consulta: basta trocar o valor ali, sem mexer no resto do SQL.
 -- =============================================================================
 
-SET search_path TO clinica, public;
-SET TIME ZONE 'America/Sao_Paulo';
+SET search_path TO clinica;
 
 
 -- =============================================================================
 -- Q1. Animais com atendimentos em aberto ou agendamentos futuros
 -- -----------------------------------------------------------------------------
 -- Uso: painel da recepção — quem está internado/em atendimento agora e quem
--- tem horário marcado. Um mesmo animal pode aparecer nas duas situações.
--- Técnicas: CTEs, UNION ALL, junção com visão, filtro por data relativa.
+-- tem horário marcado. As duas condições ficam no WHERE com IN + subconsulta;
+-- as colunas de detalhe são subconsultas escalares correlacionadas.
 -- =============================================================================
-WITH params AS (
-    SELECT now() AS agora
-),
-em_aberto AS (
-    SELECT at.id_animal,
-           'Atendimento em aberto'::text           AS situacao,
-           at.data_hora_inicio                     AS data_referencia,
-           v.nome                                  AS veterinario,
-           at.queixa_principal                     AS detalhe
-      FROM atendimento at
-      JOIN veterinario v ON v.id_veterinario = at.id_veterinario
-     WHERE at.status = 'EM_ABERTO'
-),
-futuros AS (
-    SELECT ag.id_animal,
-           'Agendamento futuro'::text,
-           ag.data_hora_inicio,
-           v.nome,
-           ag.motivo
-      FROM agendamento ag
-      JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
-      CROSS JOIN params p
-     WHERE ag.status = 'AGENDADO'
-       AND ag.data_hora_inicio > p.agora
-)
 SELECT a.animal,
        a.especie,
        a.tutor,
        a.telefone_tutor,
-       s.situacao,
-       to_char(s.data_referencia, 'DD/MM/YYYY HH24:MI') AS data_hora,
-       s.veterinario,
-       s.detalhe
-  FROM (SELECT * FROM em_aberto
-        UNION ALL
-        SELECT * FROM futuros) s
-  JOIN vw_animal a ON a.id_animal = s.id_animal
- ORDER BY s.situacao DESC,           -- "Atendimento em aberto" primeiro
-          s.data_referencia;
+       (SELECT COUNT(*)
+          FROM atendimento at
+         WHERE at.id_animal = a.id_animal
+           AND at.status    = 'EM_ABERTO')          AS atendimentos_em_aberto,
+       (SELECT MIN(ag.data_hora_inicio)
+          FROM agendamento ag
+         WHERE ag.id_animal = a.id_animal
+           AND ag.status    = 'AGENDADO'
+           AND ag.data_hora_inicio > now())         AS proximo_agendamento
+  FROM vw_animal a
+ WHERE a.id_animal IN (SELECT id_animal
+                         FROM atendimento
+                        WHERE status = 'EM_ABERTO')
+    OR a.id_animal IN (SELECT id_animal
+                         FROM agendamento
+                        WHERE status = 'AGENDADO'
+                          AND data_hora_inicio > now())
+ ORDER BY atendimentos_em_aberto DESC, proximo_agendamento;
 
 
 -- =============================================================================
 -- Q2. Ranking de veterinários por quantidade de atendimentos em um período
 -- -----------------------------------------------------------------------------
--- Uso: produtividade da equipe. Veterinários sem atendimento no período também
--- aparecem (LEFT JOIN), com zero. RANK() trata empates (mesma posição).
--- Técnicas: CTE de parâmetros, LEFT JOIN com filtro na cláusula ON,
--- agregação com FILTER, funções de janela RANK() e SUM() OVER ().
+-- Uso: produtividade da equipe. Período: 01/01/2026 a 31/10/2026 (para mudar,
+-- troque as datas nos três lugares). O filtro de data fica no ON do LEFT JOIN
+-- para que veterinários sem atendimento no período também apareçam, com zero.
 -- =============================================================================
-WITH params AS (
-    SELECT DATE '2026-01-01' AS data_inicio,
-           DATE '2026-10-31' AS data_fim
-),
-contagem AS (
-    SELECT v.id_veterinario,
-           v.nome,
-           v.ativo,
-           count(at.id_atendimento)                                          AS atendimentos,
-           count(at.id_atendimento) FILTER (WHERE at.carater <> 'ELETIVO')   AS urgencias_emergencias,
-           count(DISTINCT at.id_animal)                                      AS pacientes_distintos
-      FROM veterinario v
-      CROSS JOIN params p
-      LEFT JOIN atendimento at
-             ON at.id_veterinario    = v.id_veterinario
-            AND at.data_hora_inicio >= p.data_inicio
-            AND at.data_hora_inicio <  p.data_fim + 1      -- inclui o último dia inteiro
-     GROUP BY v.id_veterinario, v.nome, v.ativo
-)
-SELECT RANK() OVER (ORDER BY atendimentos DESC)                             AS posicao,
-       nome                                                                 AS veterinario,
-       CASE WHEN ativo THEN 'Ativo' ELSE 'Desligado' END                    AS situacao,
-       atendimentos,
-       urgencias_emergencias,
-       pacientes_distintos,
-       round(100.0 * atendimentos / NULLIF(SUM(atendimentos) OVER (), 0), 1) AS percentual
-  FROM contagem
- ORDER BY posicao, veterinario;
+SELECT v.nome                         AS veterinario,
+       v.ativo,
+       COUNT(at.id_atendimento)       AS atendimentos,
+       COUNT(DISTINCT at.id_animal)   AS pacientes_distintos,
+       (SELECT COUNT(*)
+          FROM atendimento a2
+         WHERE a2.id_veterinario   = v.id_veterinario
+           AND a2.carater         <> 'ELETIVO'
+           AND a2.data_hora_inicio >= '2026-01-01'
+           AND a2.data_hora_inicio <  '2026-11-01') AS urgencias_emergencias,
+       ROUND(100.0 * COUNT(at.id_atendimento) /
+             (SELECT COUNT(*)
+                FROM atendimento
+               WHERE data_hora_inicio >= '2026-01-01'
+                 AND data_hora_inicio <  '2026-11-01'), 1) AS percentual
+  FROM veterinario v
+  LEFT JOIN atendimento at
+         ON at.id_veterinario    = v.id_veterinario
+        AND at.data_hora_inicio >= '2026-01-01'
+        AND at.data_hora_inicio <  '2026-11-01'     -- até 31/10 inclusive
+ GROUP BY v.id_veterinario, v.nome, v.ativo
+ ORDER BY atendimentos DESC, v.nome;
 
 
 -- =============================================================================
--- Q3. Tutores com mais de um animal e histórico resumido de procedimentos
+-- Q3. Tutores que possuem mais de um animal e o histórico resumido de
+--     procedimentos
 -- -----------------------------------------------------------------------------
--- Uso: relacionamento com clientes de maior vínculo (planos família,
--- campanhas). Para cada tutor: animais, nº de atendimentos, último
--- atendimento, valor total e os procedimentos realizados com a quantidade.
--- Técnicas: HAVING, CTEs encadeadas, string_agg ordenado, LEFT JOIN para
--- incluir animais que ainda não tiveram atendimento.
+-- Uso: relacionamento com clientes de maior vínculo (planos família). Para
+-- cada tutor com 2+ animais: cada procedimento já feito nos animais dele,
+-- quantas vezes, quanto custou e quando foi a última vez.
+-- A subconsulta com GROUP BY + HAVING seleciona os tutores com mais de um animal.
 -- =============================================================================
-WITH tutores_multi AS (
-    SELECT id_tutor
-      FROM animal
-     GROUP BY id_tutor
-    HAVING count(*) > 1
-),
-animais AS (
-    SELECT a.id_tutor,
-           string_agg(a.nome || ' (' || e.nome || ')', ', ' ORDER BY a.nome) AS animais,
-           count(*)                                                          AS qtd_animais
-      FROM animal a
-      JOIN raca    r ON r.id_raca    = a.id_raca
-      JOIN especie e ON e.id_especie = r.id_especie
-     WHERE a.id_tutor IN (SELECT id_tutor FROM tutores_multi)
-     GROUP BY a.id_tutor
-),
-atend AS (
-    SELECT a.id_tutor,
-           count(at.id_atendimento)  AS atendimentos,
-           max(at.data_hora_inicio)  AS ultimo_atendimento
-      FROM animal a
-      LEFT JOIN atendimento at ON at.id_animal = a.id_animal
-     WHERE a.id_tutor IN (SELECT id_tutor FROM tutores_multi)
-     GROUP BY a.id_tutor
-),
-proc AS (
-    SELECT a.id_tutor,
-           p.nome,
-           SUM(ap.quantidade)                     AS qtd,
-           SUM(ap.quantidade * ap.valor_unitario) AS valor
-      FROM animal a
-      JOIN atendimento              at ON at.id_animal       = a.id_animal
-      JOIN atendimento_procedimento ap ON ap.id_atendimento  = at.id_atendimento
-      JOIN procedimento             p  ON p.id_procedimento  = ap.id_procedimento
-     WHERE a.id_tutor IN (SELECT id_tutor FROM tutores_multi)
-     GROUP BY a.id_tutor, p.nome
-)
-SELECT t.nome                                                         AS tutor,
-       an.qtd_animais,
-       an.animais,
-       ate.atendimentos,
-       to_char(ate.ultimo_atendimento, 'DD/MM/YYYY') AS ultimo_atendimento,
-       COALESCE(SUM(pr.valor), 0)                                     AS valor_total,
-       string_agg(pr.nome || ' ×' || pr.qtd, '; ' ORDER BY pr.qtd DESC, pr.nome) AS procedimentos
+SELECT t.nome                                   AS tutor,
+       (SELECT COUNT(*)
+          FROM animal a2
+         WHERE a2.id_tutor = t.id_tutor)        AS qtd_animais,
+       p.nome                                   AS procedimento,
+       SUM(ap.quantidade)                       AS vezes,
+       SUM(ap.quantidade * ap.valor_unitario)   AS valor_total,
+       DATE(MAX(at.data_hora_inicio))           AS ultima_vez
   FROM tutor t
-  JOIN animais an  ON an.id_tutor  = t.id_tutor
-  JOIN atend   ate ON ate.id_tutor = t.id_tutor
-  LEFT JOIN proc pr ON pr.id_tutor = t.id_tutor
- GROUP BY t.id_tutor, t.nome, an.qtd_animais, an.animais, ate.atendimentos, ate.ultimo_atendimento
- ORDER BY an.qtd_animais DESC, valor_total DESC;
+ INNER JOIN animal                   a  ON a.id_tutor         = t.id_tutor
+ INNER JOIN atendimento              at ON at.id_animal       = a.id_animal
+ INNER JOIN atendimento_procedimento ap ON ap.id_atendimento  = at.id_atendimento
+ INNER JOIN procedimento             p  ON p.id_procedimento  = ap.id_procedimento
+ WHERE t.id_tutor IN (SELECT id_tutor
+                        FROM animal
+                       GROUP BY id_tutor
+                      HAVING COUNT(*) > 1)
+ GROUP BY t.id_tutor, t.nome, p.nome
+ ORDER BY t.nome, vezes DESC, p.nome;
 
 
 -- =============================================================================
 -- Q4. Medicamentos mais prescritos por espécie de animal
 -- -----------------------------------------------------------------------------
--- Uso: planejamento de estoque e farmacovigilância. Mostra o top 3 de cada
--- espécie (com empates). A espécie vem pela cadeia
--- prescricao -> atendimento -> animal -> raca -> especie.
--- Técnicas: junção de 6 tabelas, agregação, DENSE_RANK() particionado.
+-- Uso: planejamento de estoque da farmácia. A espécie não está na prescrição:
+-- é alcançada pela cadeia prescrição -> atendimento -> animal -> raça -> espécie
+-- (junção de 6 tabelas). Dentro de cada espécie, do mais prescrito ao menos.
 -- =============================================================================
-WITH contagem AS (
-    SELECT e.nome                         AS especie,
-           m.nome_comercial || ' ' || m.concentracao AS medicamento,
-           m.principio_ativo,
-           count(*)                       AS prescricoes,
-           count(DISTINCT an.id_animal)   AS animais_distintos
-      FROM prescricao  pr
-      JOIN medicamento m  ON m.id_medicamento = pr.id_medicamento
-      JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
-      JOIN animal      an ON an.id_animal     = at.id_animal
-      JOIN raca        r  ON r.id_raca        = an.id_raca
-      JOIN especie     e  ON e.id_especie     = r.id_especie
-     GROUP BY e.nome, m.id_medicamento, m.nome_comercial, m.concentracao, m.principio_ativo
-),
-ranking AS (
-    SELECT c.*,
-           DENSE_RANK() OVER (PARTITION BY especie ORDER BY prescricoes DESC) AS posicao
-      FROM contagem c
-)
-SELECT especie, posicao, medicamento, principio_ativo, prescricoes, animais_distintos
-  FROM ranking
- WHERE posicao <= 3
- ORDER BY especie, posicao, medicamento;
+SELECT e.nome                         AS especie,
+       m.nome_comercial,
+       m.concentracao,
+       m.principio_ativo,
+       COUNT(*)                       AS prescricoes,
+       COUNT(DISTINCT an.id_animal)   AS animais
+  FROM prescricao pr
+ INNER JOIN medicamento m  ON m.id_medicamento  = pr.id_medicamento
+ INNER JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
+ INNER JOIN animal      an ON an.id_animal      = at.id_animal
+ INNER JOIN raca        r  ON r.id_raca         = an.id_raca
+ INNER JOIN especie     e  ON e.id_especie      = r.id_especie
+ GROUP BY e.nome, m.id_medicamento, m.nome_comercial, m.concentracao, m.principio_ativo
+ ORDER BY e.nome, prescricoes DESC, m.nome_comercial;
 
 
 -- =============================================================================
--- Q5. Junção de 3+ tabelas + agregação + subconsulta
+-- Q5. Consulta com junção de 3+ tabelas + agregação + subconsulta
 --     "Pacientes cujo gasto total supera a média de gasto por paciente"
 -- -----------------------------------------------------------------------------
--- Uso: identificar pacientes de alto custo (doenças crônicas, cirurgias) para
--- acompanhamento e oferta de planos de saúde pet.
--- Técnicas: junção de 6 tabelas, SUM/COUNT, subconsulta em tabela derivada
--- (média por paciente) usada no HAVING e no SELECT.
+-- Uso: identificar pacientes de alto custo (doenças crônicas, cirurgias).
+-- Junção de 6 tabelas, SUM/COUNT e, no HAVING, uma subconsulta que calcula a
+-- média dos gastos por paciente a partir de uma tabela derivada.
 -- =============================================================================
-SELECT an.nome                                            AS animal,
-       e.nome                                             AS especie,
-       t.nome                                             AS tutor,
-       count(DISTINCT at.id_atendimento)                  AS atendimentos,
-       SUM(ap.quantidade * ap.valor_unitario)             AS gasto_total,
-       round(m.media, 2)                                  AS media_geral,
-       round(100.0 * (SUM(ap.quantidade * ap.valor_unitario) / m.media - 1), 1) AS acima_da_media_pct
+SELECT an.nome                                AS animal,
+       e.nome                                 AS especie,
+       t.nome                                 AS tutor,
+       COUNT(DISTINCT at.id_atendimento)      AS atendimentos,
+       SUM(ap.quantidade * ap.valor_unitario) AS gasto_total
   FROM animal an
-  JOIN raca                     r  ON r.id_raca        = an.id_raca
-  JOIN especie                  e  ON e.id_especie     = r.id_especie
-  JOIN tutor                    t  ON t.id_tutor       = an.id_tutor
-  JOIN atendimento              at ON at.id_animal     = an.id_animal
-  JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
-  CROSS JOIN (
-        -- subconsulta: gasto médio por paciente atendido
-        SELECT avg(gasto) AS media
-          FROM (SELECT at2.id_animal,
-                       SUM(ap2.quantidade * ap2.valor_unitario) AS gasto
+ INNER JOIN raca                     r  ON r.id_raca         = an.id_raca
+ INNER JOIN especie                  e  ON e.id_especie      = r.id_especie
+ INNER JOIN tutor                    t  ON t.id_tutor        = an.id_tutor
+ INNER JOIN atendimento              at ON at.id_animal      = an.id_animal
+ INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+ GROUP BY an.id_animal, an.nome, e.nome, t.nome
+HAVING SUM(ap.quantidade * ap.valor_unitario) > (
+        SELECT AVG(gasto)
+          FROM (SELECT SUM(ap2.quantidade * ap2.valor_unitario) AS gasto
                   FROM atendimento at2
-                  JOIN atendimento_procedimento ap2 ON ap2.id_atendimento = at2.id_atendimento
-                 GROUP BY at2.id_animal) gasto_por_animal
-       ) m
- GROUP BY an.id_animal, an.nome, e.nome, t.nome, m.media
-HAVING SUM(ap.quantidade * ap.valor_unitario) > m.media
+                 INNER JOIN atendimento_procedimento ap2
+                         ON ap2.id_atendimento = at2.id_atendimento
+                 GROUP BY at2.id_animal) gastos
+       )
  ORDER BY gasto_total DESC;
 
 
@@ -234,94 +160,107 @@ HAVING SUM(ap.quantidade * ap.valor_unitario) > m.media
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- C1. Histórico clínico completo de um animal (prontuário)
---     Usa a visão vw_historico_clinico. Troque o nome do animal em params.
+-- C1. Prontuário de um animal (usa a visão vw_historico_clinico)
 -- -----------------------------------------------------------------------------
-WITH params AS (SELECT 'Zeus'::varchar AS animal)
-SELECT to_char(h.data_hora_inicio, 'DD/MM/YYYY') AS data,
-       h.veterinario,
-       h.queixa_principal,
-       h.diagnostico,
-       h.peso_kg,
-       h.procedimentos,
-       h.prescricoes,
-       h.valor_total
-  FROM vw_historico_clinico h
-  JOIN params p ON h.animal = p.animal
- ORDER BY h.data_hora_inicio DESC;
+SELECT data_hora_inicio,
+       veterinario,
+       queixa_principal,
+       diagnostico,
+       peso_kg,
+       qtd_procedimentos,
+       qtd_prescricoes,
+       valor_total
+  FROM vw_historico_clinico
+ WHERE animal = 'Zeus'
+ ORDER BY data_hora_inicio DESC;
 
 -- -----------------------------------------------------------------------------
--- C2. Faturamento mensal por categoria de procedimento (ano corrente dos dados)
---     Pivot com FILTER: uma coluna por categoria.
+-- C2. Receitas de um animal: medicamentos prescritos em cada atendimento
 -- -----------------------------------------------------------------------------
-SELECT to_char(date_trunc('month', at.data_hora_inicio), 'YYYY-MM')                     AS mes,
-       SUM(ap.quantidade * ap.valor_unitario) FILTER (WHERE p.categoria = 'CONSULTA')   AS consultas,
-       SUM(ap.quantidade * ap.valor_unitario) FILTER (WHERE p.categoria IN ('EXAME', 'IMAGEM')) AS exames,
-       SUM(ap.quantidade * ap.valor_unitario) FILTER (WHERE p.categoria = 'VACINA')     AS vacinas,
-       SUM(ap.quantidade * ap.valor_unitario) FILTER (WHERE p.categoria = 'CIRURGIA')   AS cirurgias,
-       SUM(ap.quantidade * ap.valor_unitario) FILTER (WHERE p.categoria IN ('TERAPIA', 'INTERNACAO')) AS terapia_internacao,
-       SUM(ap.quantidade * ap.valor_unitario)                                           AS total
+SELECT DATE(at.data_hora_inicio) AS data,
+       m.nome_comercial,
+       m.concentracao,
+       pr.dose_quantidade,
+       pr.dose_unidade,
+       pr.frequencia_horas,
+       pr.duracao_dias
+  FROM prescricao pr
+ INNER JOIN atendimento at ON at.id_atendimento = pr.id_atendimento
+ INNER JOIN animal      an ON an.id_animal      = at.id_animal
+ INNER JOIN medicamento m  ON m.id_medicamento  = pr.id_medicamento
+ WHERE an.nome = 'Zeus'
+ ORDER BY at.data_hora_inicio DESC, m.nome_comercial;
+
+-- -----------------------------------------------------------------------------
+-- C3. Faturamento mensal por categoria de procedimento (2026)
+-- -----------------------------------------------------------------------------
+SELECT DATE(date_trunc('month', at.data_hora_inicio)) AS mes,
+       p.categoria,
+       SUM(ap.quantidade * ap.valor_unitario)         AS faturamento
   FROM atendimento at
-  JOIN atendimento_procedimento ap ON ap.id_atendimento  = at.id_atendimento
-  JOIN procedimento             p  ON p.id_procedimento  = ap.id_procedimento
- WHERE at.data_hora_inicio >= DATE '2026-01-01'
-   AND at.data_hora_inicio <  DATE '2027-01-01'
- GROUP BY 1
- ORDER BY 1;
+ INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+ INNER JOIN procedimento             p  ON p.id_procedimento = ap.id_procedimento
+ WHERE at.data_hora_inicio >= '2026-01-01'
+   AND at.data_hora_inicio <  '2027-01-01'
+ GROUP BY mes, p.categoria
+ ORDER BY mes, faturamento DESC;
 
 -- -----------------------------------------------------------------------------
--- C3. Pacientes vivos sem vacina nos últimos 12 meses (cães e gatos)
---     Usa NOT EXISTS (anti-join) para achar quem precisa ser chamado.
+-- C4. Cães e gatos vivos sem vacina nos últimos 12 meses
+--     NOT IN encontra quem NÃO tem vacina recente; a subconsulta escalar
+--     mostra a data da última vacina (vazia se nunca vacinou).
 -- -----------------------------------------------------------------------------
 SELECT a.animal,
        a.especie,
        a.tutor,
        a.telefone_tutor,
-       (SELECT to_char(max(at.data_hora_inicio), 'DD/MM/YYYY')
+       (SELECT DATE(MAX(at.data_hora_inicio))
           FROM atendimento at
-          JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
-          JOIN procedimento p              ON p.id_procedimento = ap.id_procedimento
+         INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+         INNER JOIN procedimento             p  ON p.id_procedimento = ap.id_procedimento
          WHERE at.id_animal = a.id_animal
-           AND p.categoria  = 'VACINA')                       AS ultima_vacina
+           AND p.categoria  = 'VACINA') AS ultima_vacina
   FROM vw_animal a
  WHERE a.vivo
    AND a.especie IN ('Cão', 'Gato')
-   AND NOT EXISTS (
-        SELECT 1
+   AND a.id_animal NOT IN (
+        SELECT at.id_animal
           FROM atendimento at
-          JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
-          JOIN procedimento p              ON p.id_procedimento = ap.id_procedimento
-         WHERE at.id_animal        = a.id_animal
-           AND p.categoria         = 'VACINA'
+         INNER JOIN atendimento_procedimento ap ON ap.id_atendimento = at.id_atendimento
+         INNER JOIN procedimento             p  ON p.id_procedimento = ap.id_procedimento
+         WHERE p.categoria = 'VACINA'
            AND at.data_hora_inicio >= now() - INTERVAL '12 months')
  ORDER BY a.especie, a.animal;
 
 -- -----------------------------------------------------------------------------
--- C4. Taxa de cancelamento de agendamentos por veterinário
+-- C5. Agendamentos por veterinário e situação
 -- -----------------------------------------------------------------------------
-SELECT v.nome                                                  AS veterinario,
-       count(*)                                                AS agendamentos,
-       count(*) FILTER (WHERE ag.status = 'REALIZADO')         AS realizados,
-       count(*) FILTER (WHERE ag.status = 'CANCELADO')         AS cancelados,
-       count(*) FILTER (WHERE ag.status = 'AGENDADO')          AS pendentes,
-       round(100.0 * count(*) FILTER (WHERE ag.status = 'CANCELADO') / count(*), 1) AS taxa_cancelamento_pct
+SELECT v.nome    AS veterinario,
+       ag.status,
+       COUNT(*)  AS quantidade
   FROM agendamento ag
-  JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
- GROUP BY v.id_veterinario, v.nome
- ORDER BY taxa_cancelamento_pct DESC, agendamentos DESC;
+ INNER JOIN veterinario v ON v.id_veterinario = ag.id_veterinario
+ GROUP BY v.nome, ag.status
+ ORDER BY v.nome, ag.status;
 
 -- -----------------------------------------------------------------------------
--- C5. Itens restritos por espécie (o que cada espécie pode receber)
---     Lista procedimentos e medicamentos com restrição, agrupados por espécie.
---     Itens sem restrição valem para todas e não aparecem aqui.
+-- C6. Procedimentos restritos por espécie
+--     Itens que não aparecem aqui valem para todas as espécies.
 -- -----------------------------------------------------------------------------
-SELECT e.nome                                                          AS especie,
-       string_agg(DISTINCT p.nome, '; ')                               AS procedimentos_restritos,
-       string_agg(DISTINCT m.nome_comercial || ' ' || m.concentracao, '; ') AS medicamentos_restritos
-  FROM especie e
-  LEFT JOIN procedimento_especie pe ON pe.id_especie      = e.id_especie
-  LEFT JOIN procedimento         p  ON p.id_procedimento  = pe.id_procedimento
-  LEFT JOIN medicamento_especie  me ON me.id_especie      = e.id_especie
-  LEFT JOIN medicamento          m  ON m.id_medicamento   = me.id_medicamento
- GROUP BY e.id_especie, e.nome
- ORDER BY e.id_especie;
+SELECT e.nome AS especie,
+       p.nome AS procedimento
+  FROM procedimento_especie pe
+ INNER JOIN especie      e ON e.id_especie      = pe.id_especie
+ INNER JOIN procedimento p ON p.id_procedimento = pe.id_procedimento
+ ORDER BY e.id_especie, p.nome;
+
+-- -----------------------------------------------------------------------------
+-- C7. Medicamentos restritos por espécie
+-- -----------------------------------------------------------------------------
+SELECT e.nome AS especie,
+       m.nome_comercial,
+       m.concentracao
+  FROM medicamento_especie me
+ INNER JOIN especie     e ON e.id_especie     = me.id_especie
+ INNER JOIN medicamento m ON m.id_medicamento = me.id_medicamento
+ ORDER BY e.id_especie, m.nome_comercial;

@@ -15,10 +15,10 @@ Trabalho prático da disciplina de Banco de Dados — Engenharia de Computação
 - **Regras por espécie**: vacinas, cirurgias e medicamentos restritos às espécies indicadas, garantido por gatilho.
 - **Interface web** em Node.js ([`app/`](app/)) com painel, agenda, prontuário, cadastros e relatórios.
 - **Regras de negócio no próprio banco**, não só na aplicação:
-  - agenda sem conflito por veterinário, via restrição de exclusão GiST (`tstzrange` + `btree_gist`);
-  - FK composta que garante que o atendimento vinculado a um agendamento seja do mesmo animal;
+  - agenda sem conflito por veterinário, via gatilho que procura horários sobrepostos;
+  - atendimento só pode usar um agendamento do mesmo animal e que não esteja cancelado;
   - gatilhos que marcam o agendamento como `REALIZADO`, barram atendimento de horário cancelado ou de animal com óbito e congelam o preço praticado (histórico imune a reajustes).
-- **Índices justificados**: compostos, parciais (`WHERE status = 'AGENDADO'`) e de expressão (`lower(nome)`).
+- **Índices justificados** nas chaves estrangeiras e nas colunas mais filtradas (compostos onde a consulta usa duas colunas).
 - **Visões** `vw_animal` e `vw_historico_clinico` (prontuário consolidado).
 - Scripts **idempotentes e transacionais**, com `COMMENT ON` em todos os objetos.
 - Diagrama lógico **gerado a partir do catálogo** e relatório PDF **montado executando as consultas**, de modo que a documentação acompanha o código.
@@ -37,7 +37,7 @@ Trabalho prático da disciplina de Banco de Dados — Engenharia de Computação
 │   ├── 00_criar_banco.sql      # CREATE DATABASE (rodar conectado ao banco "postgres")
 │   ├── 01_ddl.sql              # esquema, tabelas, restrições, índices, gatilhos, visões
 │   ├── 02_dml.sql              # carga de dados + exemplos de UPDATE/DELETE + testes de integridade
-│   └── 03_consultas.sql        # 5 consultas obrigatórias + 5 complementares
+│   └── 03_consultas.sql        # 5 consultas obrigatórias + 7 complementares
 ├── app/                        # interface web (Node.js + Express)
 ├── docs/
 │   ├── relatorio.pdf           # entregável
@@ -96,18 +96,19 @@ Detalhes em [`app/README.md`](app/README.md).
 
 | # | Pergunta de negócio | Técnicas |
 |---|---|---|
-| Q1 | Animais com atendimento em aberto ou agendamento futuro | CTEs, `UNION ALL`, visão |
-| Q2 | Ranking de veterinários por atendimentos no período | `LEFT JOIN` com filtro no `ON`, `FILTER`, `RANK()`, `SUM() OVER ()` |
-| Q3 | Tutores com mais de um animal + resumo de procedimentos | `HAVING`, CTEs por nível de agregação, `string_agg` |
-| Q4 | Medicamentos mais prescritos por espécie | junção de 6 tabelas, `DENSE_RANK() OVER (PARTITION BY ...)` |
-| Q5 | Pacientes com gasto acima da média | junção de 6 tabelas, agregação, subconsulta em tabela derivada no `HAVING` |
-| C1 | Prontuário de um animal | visão com `LEFT JOIN LATERAL` |
-| C2 | Faturamento mensal por categoria | pivot com `SUM(...) FILTER` |
-| C3 | Cães e gatos sem vacina há 12 meses | anti-join `NOT EXISTS`, subconsulta correlacionada |
-| C4 | Taxa de cancelamento por veterinário | agregação condicional |
-| C5 | Itens restritos por espécie | `LEFT JOIN` múltiplos, `string_agg(DISTINCT ...)` |
+| Q1 | Animais com atendimento em aberto ou agendamento futuro | `IN` com subconsulta, subconsultas escalares correlacionadas, visão |
+| Q2 | Ranking de veterinários por atendimentos no período | `LEFT JOIN` com filtro no `ON`, `COUNT`, `GROUP BY`, `ORDER BY` |
+| Q3 | Tutores com mais de um animal + resumo de procedimentos | subconsulta com `GROUP BY` + `HAVING`, junção de 5 tabelas |
+| Q4 | Medicamentos mais prescritos por espécie | junção de 6 tabelas, `COUNT`, `COUNT(DISTINCT)` |
+| Q5 | Pacientes com gasto acima da média | junção de 6 tabelas, `SUM`, subconsulta com tabela derivada no `HAVING` |
+| C1 | Prontuário de um animal | visão `vw_historico_clinico` |
+| C2 | Receitas de um animal | junção de 4 tabelas |
+| C3 | Faturamento mensal por categoria | `date_trunc`, `GROUP BY` |
+| C4 | Cães e gatos sem vacina há 12 meses | `NOT IN` com subconsulta, subconsulta correlacionada |
+| C5 | Agendamentos por veterinário e situação | `GROUP BY` em duas colunas |
+| C6/C7 | Itens restritos por espécie | junções nas tabelas de restrição |
 
-> Os dados vão de jan/2026 a jan/2027, com 27/10/2026 como "hoje". Q1 e C3 usam `now()`; se rodar bem depois dessa data, troque `now()` por uma data fixa na CTE `params`.
+> Os dados vão de jan/2026 a jan/2027, com 27/10/2026 como "hoje". Q1 e C4 usam `now()`; se rodar bem depois dessa data, troque `now()` por uma data fixa.
 
 ## Regerar diagramas e relatório
 
