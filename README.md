@@ -50,7 +50,7 @@ Trabalho prático da disciplina de Banco de Dados — Engenharia de Computação
 
 ### pgAdmin 4
 
-1. No banco `postgres`, abra a **Query Tool** e execute `sql/00_criar_banco.sql`.
+1. No banco `postgres`, abra a **Query Tool** e carregue `sql/00_criar_banco.sql`. Selecione só o `CREATE DATABASE` e aperte F5; depois selecione o resto e aperte F5 de novo (o pgAdmin não roda `CREATE DATABASE` junto com outros comandos).
 2. Atualize a árvore, selecione `clinica_vet` e abra uma Query Tool nele.
 3. Execute `01_ddl.sql`, depois `02_dml.sql`.
 4. Em `03_consultas.sql`, selecione uma consulta e pressione **F5**.

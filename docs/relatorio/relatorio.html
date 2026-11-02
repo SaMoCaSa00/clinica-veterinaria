@@ -377,7 +377,7 @@
 <h2 id="apA" class="no-num app-title">Apêndice A — Como executar</h2>
 <h3 class="no-num">No pgAdmin 4</h3>
 <ol>
-  <li>Conecte-se ao servidor, clique com o botão direito no banco <code>postgres</code>, abra <i>Query Tool</i>, carregue <code>00_criar_banco.sql</code> e execute (F5).</li>
+  <li>Conecte-se ao servidor, clique com o botão direito no banco <code>postgres</code>, abra <i>Query Tool</i> e carregue <code>00_criar_banco.sql</code>. Selecione só o <code>CREATE DATABASE</code> e execute (F5); depois selecione o restante e execute de novo. O pgAdmin envia o texto todo de uma vez, e <code>CREATE DATABASE</code> não pode rodar junto com outros comandos.</li>
   <li>Atualize a árvore (F5 no painel lateral), selecione o novo banco <code>clinica_vet</code> e abra uma <i>Query Tool</i> nele.</li>
   <li>Execute, nesta ordem, <code>01_ddl.sql</code>, <code>02_dml.sql</code> e <code>03_consultas.sql</code>. No último, selecione uma consulta por vez e execute com F5 para ver cada resultado na grade.</li>
   <li>Os objetos ficam em <i>clinica_vet → Schemas → clinica</i>. Para consultar sem prefixar o esquema, execute <code>SET search_path TO clinica;</code>.</li>

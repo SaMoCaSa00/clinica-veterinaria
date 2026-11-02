@@ -3,12 +3,16 @@
 --  00_criar_banco.sql — criação do banco de dados
 -- -----------------------------------------------------------------------------
 --  Execute este script conectado ao banco padrão "postgres".
---  No pgAdmin 4: botão direito em "postgres" > Query Tool > executar (F5).
---  Depois, abra uma Query Tool no banco "clinica_vet" e rode os demais scripts
---  na ordem: 01_ddl.sql -> 02_dml.sql -> 03_consultas.sql.
 --
---  CREATE DATABASE não pode rodar dentro de uma transação, por isso fica
---  em um arquivo separado.
+--  No pgAdmin 4 (botão direito em "postgres" > Query Tool), rode em DUAS etapas:
+--    1) selecione só o comando CREATE DATABASE e pressione F5;
+--    2) selecione o COMMENT e o ALTER DATABASE e pressione F5.
+--  O pgAdmin envia o texto todo de uma vez, e CREATE DATABASE não pode rodar
+--  junto com outros comandos (erro 25001). No psql o arquivo roda direto.
+--
+--  Depois, atualize a árvore (F5 em "Databases"), abra uma Query Tool no banco
+--  "clinica_vet" e rode os demais scripts na ordem:
+--  01_ddl.sql -> 02_dml.sql -> 03_consultas.sql.
 -- =============================================================================
 
 -- Descomente a linha abaixo para recriar o banco do zero
